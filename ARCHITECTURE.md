@@ -1,7 +1,7 @@
-# Portal Seguríssimo — Arquitetura do Back-end
+# Portal Seguríssimo — Arquitetura do Back-end (v2)
 
-> **IMPORTANTE**: Este documento é a referência para recriar o back-end 
-> no servidor físico em `jotatechinfo.com.br`. Contém o código exato de 
+> **IMPORTANTE**: Este documento é a referência para recriar o back-end
+> no servidor físico em `jotatechinfo.com.br`. Contém o código exato de
 > tabelas, políticas RLS, buckets de storage e funções.
 
 ---
@@ -9,17 +9,52 @@
 ## 1. Estrutura de Rotas (Front-end)
 
 ```
-/                         → Landing page
-/:slug/enviar             → Upload público (white-label)
-/:slug/login              → Login do profissional
-/:slug/dashboard          → Dashboard autenticado
+/                                → Landing page (vendas)
+/auth/login                      → Login / Signup
+/:slug/enviar/:requestId         → Upload com checklist (link único por solicitação)
+/:slug/dashboard                 → Dashboard autenticado do profissional
 ```
 
 ---
 
-## 2. Tabelas do Banco de Dados
+## 2. Enum e Tabelas
 
-### 2.1 `companies` — Empresas/Profissionais
+### 2.0 Enum de Roles
+
+```sql
+CREATE TYPE public.app_role AS ENUM ('admin', 'user');
+```
+
+### 2.1 `user_roles` — Papéis de Usuário
+
+```sql
+CREATE TABLE public.user_roles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role app_role NOT NULL,
+  UNIQUE (user_id, role)
+);
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "users_read_own_roles" ON public.user_roles
+  FOR SELECT USING (auth.uid() = user_id);
+```
+
+### 2.2 Função de Verificação de Role
+
+```sql
+CREATE OR REPLACE FUNCTION public.has_role(_user_id UUID, _role app_role)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.user_roles
+    WHERE user_id = _user_id AND role = _role
+  )
+$$;
+```
+
+### 2.3 `companies` — Empresas/Profissionais
 
 ```sql
 CREATE TABLE public.companies (
@@ -31,171 +66,164 @@ CREATE TABLE public.companies (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- Índice para busca por slug (usado na área pública)
 CREATE INDEX idx_companies_slug ON public.companies(slug);
-
--- Índice para busca por user_id (usado no dashboard)
 CREATE INDEX idx_companies_user_id ON public.companies(user_id);
+ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "companies_public_read" ON public.companies FOR SELECT USING (true);
+CREATE POLICY "companies_owner_insert" ON public.companies FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "companies_owner_update" ON public.companies FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "companies_owner_delete" ON public.companies FOR DELETE USING (auth.uid() = user_id);
 ```
 
-### 2.2 `uploads` — Arquivos recebidos
+### 2.4 `document_requests` — Solicitações de Documentos
+
+```sql
+CREATE TABLE public.document_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  client_name TEXT NOT NULL,
+  client_email TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_doc_requests_company ON public.document_requests(company_id);
+ALTER TABLE public.document_requests ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "doc_requests_public_read" ON public.document_requests FOR SELECT USING (true);
+CREATE POLICY "doc_requests_owner_insert" ON public.document_requests
+  FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM public.companies WHERE id = company_id AND user_id = auth.uid()));
+CREATE POLICY "doc_requests_owner_update" ON public.document_requests
+  FOR UPDATE USING (EXISTS (SELECT 1 FROM public.companies WHERE id = company_id AND user_id = auth.uid()));
+CREATE POLICY "doc_requests_owner_delete" ON public.document_requests
+  FOR DELETE USING (EXISTS (SELECT 1 FROM public.companies WHERE id = company_id AND user_id = auth.uid()));
+```
+
+### 2.5 `request_items` — Itens do Checklist
+
+```sql
+CREATE TABLE public.request_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id UUID NOT NULL REFERENCES public.document_requests(id) ON DELETE CASCADE,
+  stage_name TEXT NOT NULL DEFAULT 'Geral',
+  item_name TEXT NOT NULL,
+  is_completed BOOLEAN NOT NULL DEFAULT false,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_request_items_request ON public.request_items(request_id);
+ALTER TABLE public.request_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "request_items_public_read" ON public.request_items FOR SELECT USING (true);
+CREATE POLICY "request_items_owner_insert" ON public.request_items
+  FOR INSERT WITH CHECK (
+    EXISTS (SELECT 1 FROM public.document_requests dr JOIN public.companies c ON c.id = dr.company_id WHERE dr.id = request_id AND c.user_id = auth.uid())
+  );
+CREATE POLICY "request_items_owner_update" ON public.request_items
+  FOR UPDATE USING (
+    EXISTS (SELECT 1 FROM public.document_requests dr JOIN public.companies c ON c.id = dr.company_id WHERE dr.id = request_id AND c.user_id = auth.uid())
+  );
+```
+
+### 2.6 `uploads` — Arquivos Enviados
 
 ```sql
 CREATE TABLE public.uploads (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_item_id UUID NOT NULL REFERENCES public.request_items(id) ON DELETE CASCADE,
   company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   file_name TEXT NOT NULL,
   file_size BIGINT NOT NULL,
-  file_path TEXT NOT NULL,          -- caminho no storage bucket
-  sender_name TEXT,                 -- nome opcional de quem enviou
-  sender_email TEXT,                -- email opcional de quem enviou
+  file_path TEXT NOT NULL,
   content_type TEXT,
+  sender_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- Índice para listar uploads por empresa
-CREATE INDEX idx_uploads_company_id ON public.uploads(company_id);
-```
-
----
-
-## 3. Políticas RLS (Row Level Security)
-
-### 3.1 Tabela `companies`
-
-```sql
-ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
-
--- Qualquer pessoa pode ler (necessário para área pública buscar dados via slug)
-CREATE POLICY "companies_public_read" ON public.companies
-  FOR SELECT USING (true);
-
--- Apenas o dono pode atualizar sua empresa
-CREATE POLICY "companies_owner_update" ON public.companies
-  FOR UPDATE USING (auth.uid() = user_id);
-
--- Apenas o dono pode inserir (vinculado ao seu user_id)
-CREATE POLICY "companies_owner_insert" ON public.companies
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
-
--- Apenas o dono pode deletar
-CREATE POLICY "companies_owner_delete" ON public.companies
-  FOR DELETE USING (auth.uid() = user_id);
-```
-
-### 3.2 Tabela `uploads`
-
-```sql
+CREATE INDEX idx_uploads_item ON public.uploads(request_item_id);
+CREATE INDEX idx_uploads_company ON public.uploads(company_id);
 ALTER TABLE public.uploads ENABLE ROW LEVEL SECURITY;
 
--- Qualquer pessoa pode inserir (upload público sem login)
-CREATE POLICY "uploads_public_insert" ON public.uploads
-  FOR INSERT WITH CHECK (true);
-
--- Apenas o dono da empresa pode visualizar os uploads
+-- INTENCIONAL: Upload público (core feature - clientes enviam sem login)
+CREATE POLICY "uploads_public_insert" ON public.uploads FOR INSERT WITH CHECK (true);
 CREATE POLICY "uploads_owner_read" ON public.uploads
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM public.companies
-      WHERE companies.id = uploads.company_id
-      AND companies.user_id = auth.uid()
-    )
-  );
-
--- Apenas o dono da empresa pode deletar uploads
+  FOR SELECT USING (EXISTS (SELECT 1 FROM public.companies WHERE id = company_id AND user_id = auth.uid()));
 CREATE POLICY "uploads_owner_delete" ON public.uploads
-  FOR DELETE USING (
-    EXISTS (
-      SELECT 1 FROM public.companies
-      WHERE companies.id = uploads.company_id
-      AND companies.user_id = auth.uid()
-    )
-  );
+  FOR DELETE USING (EXISTS (SELECT 1 FROM public.companies WHERE id = company_id AND user_id = auth.uid()));
 ```
 
 ---
 
-## 4. Storage Buckets
+## 3. Storage
 
 ```sql
--- Bucket para armazenar os arquivos enviados
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('uploads', 'uploads', false);
-```
+INSERT INTO storage.buckets (id, name, public) VALUES ('uploads', 'uploads', false);
 
-### Políticas de Storage
+-- Upload público
+CREATE POLICY "uploads_storage_public_insert" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'uploads');
 
-```sql
--- Upload público (qualquer pessoa pode fazer upload)
-CREATE POLICY "uploads_public_upload" ON storage.objects
-  FOR INSERT WITH CHECK (
-    bucket_id = 'uploads'
-  );
-
--- Apenas o dono da empresa pode baixar
-CREATE POLICY "uploads_owner_download" ON storage.objects
+-- Download restrito ao dono
+CREATE POLICY "uploads_storage_owner_select" ON storage.objects
   FOR SELECT USING (
     bucket_id = 'uploads'
-    AND auth.uid() IN (
-      SELECT c.user_id FROM public.companies c
-      JOIN public.uploads u ON u.company_id = c.id
-      WHERE u.file_path = name
-    )
+    AND auth.uid() IN (SELECT c.user_id FROM public.companies c JOIN public.uploads u ON u.company_id = c.id WHERE u.file_path = name)
   );
 
--- Apenas o dono pode deletar
-CREATE POLICY "uploads_owner_delete_storage" ON storage.objects
+-- Delete restrito ao dono
+CREATE POLICY "uploads_storage_owner_delete" ON storage.objects
   FOR DELETE USING (
     bucket_id = 'uploads'
-    AND auth.uid() IN (
-      SELECT c.user_id FROM public.companies c
-      JOIN public.uploads u ON u.company_id = c.id
-      WHERE u.file_path = name
-    )
+    AND auth.uid() IN (SELECT c.user_id FROM public.companies c JOIN public.uploads u ON u.company_id = c.id WHERE u.file_path = name)
   );
 ```
 
 ---
 
-## 5. Funções de Upload (Edge Function)
+## 4. Triggers
 
-```typescript
-// supabase/functions/upload-file/index.ts
-// Esta função será criada quando conectarmos o Lovable Cloud.
-// Responsável por:
-// 1. Receber o arquivo via multipart/form-data
-// 2. Validar o slug da empresa
-// 3. Fazer upload para o bucket 'uploads'
-// 4. Registrar metadata na tabela 'uploads'
-// 5. Retornar confirmação de sucesso
+```sql
+-- Updated_at automático
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON public.companies
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TRIGGER update_doc_requests_updated_at BEFORE UPDATE ON public.document_requests
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+-- Auto-criar company e role ao registrar usuário
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.companies (user_id, slug, display_name)
+  VALUES (NEW.id, LOWER(REPLACE(SPLIT_PART(NEW.email, '@', 1), '.', '-')), SPLIT_PART(NEW.email, '@', 1));
+  INSERT INTO public.user_roles (user_id, role) VALUES (NEW.id, 'user');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 ```
 
 ---
 
-## 6. Autenticação
+## 5. Autenticação
 
-Utiliza **Supabase Auth** com e-mail e senha.
-
-- Registro: Profissional cria conta e define slug/display_name
-- Login: `/:slug/login` autentica via `supabase.auth.signInWithPassword()`
-- Sessão: JWT armazenado automaticamente pelo cliente Supabase
-- Proteção de rotas: Dashboard verifica `supabase.auth.getSession()`
+- Login/Signup via e-mail e senha (Supabase Auth / GoTrue)
+- JWT automático pelo cliente Supabase
+- Proteção de rotas no React (verificação de sessão)
 
 ---
 
-## 7. Variáveis de Ambiente
+## 6. Notas para Migração (jotatechinfo.com.br)
 
-```
-SUPABASE_URL=https://seu-projeto.supabase.co
-SUPABASE_ANON_KEY=eyJ...
-```
-
----
-
-## 8. Notas para Migração
-
-- O Supabase pode ser substituído por PostgreSQL + PostgREST no servidor físico
-- As políticas RLS funcionam nativamente no PostgreSQL
-- O storage pode ser substituído por MinIO ou sistema de arquivos local
-- A autenticação pode ser migrada para GoTrue (usado pelo Supabase) ou outra solução JWT
+- PostgreSQL + PostgREST substitui o Supabase
+- Storage → MinIO ou sistema de arquivos local
+- Auth → GoTrue self-hosted ou JWT customizado
+- RLS funciona nativamente no PostgreSQL
+- As policies de INSERT público são intencionais (upload sem auth)
