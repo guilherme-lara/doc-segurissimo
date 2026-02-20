@@ -6,17 +6,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 const AuthPage = () => {
   const navigate = useNavigate();
-  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupConfirm, setSignupConfirm] = useState("");
+
+  const redirectToDashboard = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: company } = await supabase
+        .from("companies")
+        .select("slug")
+        .eq("user_id", user.id)
+        .single();
+      navigate(company ? `/${company.slug}/dashboard` : "/");
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,23 +38,10 @@ const AuthPage = () => {
         password: loginPassword,
       });
       if (error) throw error;
-
-      // Fetch company slug for this user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: company } = await supabase
-          .from("companies")
-          .select("slug")
-          .eq("user_id", user.id)
-          .single();
-        navigate(company ? `/${company.slug}/dashboard` : "/");
-      }
+      toast.success("Login realizado com sucesso!");
+      await redirectToDashboard();
     } catch (error: any) {
-      toast({
-        title: "Erro ao entrar",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast.error("Erro ao entrar", { description: error.message });
     } finally {
       setIsLoading(false);
     }
@@ -52,7 +50,7 @@ const AuthPage = () => {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (signupPassword !== signupConfirm) {
-      toast({ title: "Senhas não coincidem", variant: "destructive" });
+      toast.error("Senhas não coincidem");
       return;
     }
     setIsLoading(true);
@@ -60,19 +58,13 @@ const AuthPage = () => {
       const { error } = await supabase.auth.signUp({
         email: signupEmail,
         password: signupPassword,
-        options: { emailRedirectTo: window.location.origin },
       });
       if (error) throw error;
-      toast({
-        title: "Conta criada!",
-        description: "Verifique seu e-mail para confirmar o cadastro.",
-      });
+      toast.success("Conta criada com sucesso!");
+      // Auto-confirm is enabled — redirect immediately
+      await redirectToDashboard();
     } catch (error: any) {
-      toast({
-        title: "Erro ao criar conta",
-        description: error.message,
-        variant: "destructive",
-      });
+      toast.error("Erro ao criar conta", { description: error.message });
     } finally {
       setIsLoading(false);
     }
