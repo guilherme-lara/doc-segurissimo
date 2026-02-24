@@ -171,6 +171,47 @@ export type Database = {
           },
         ]
       }
+      user_plans: {
+        Row: {
+          company_id: string
+          created_at: string
+          id: string
+          max_active_requests: number
+          max_file_size_mb: number
+          plan: Database["public"]["Enums"]["user_plan"]
+          show_watermark: boolean
+          updated_at: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          id?: string
+          max_active_requests?: number
+          max_file_size_mb?: number
+          plan?: Database["public"]["Enums"]["user_plan"]
+          show_watermark?: boolean
+          updated_at?: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          id?: string
+          max_active_requests?: number
+          max_file_size_mb?: number
+          plan?: Database["public"]["Enums"]["user_plan"]
+          show_watermark?: boolean
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_plans_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: true
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       user_roles: {
         Row: {
           id: string
@@ -204,6 +245,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
+      user_plan: "free" | "pro"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -332,6 +374,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      user_plan: ["free", "pro"],
     },
   },
 } as const

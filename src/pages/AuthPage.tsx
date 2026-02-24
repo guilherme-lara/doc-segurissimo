@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Shield, Mail, Lock, ArrowRight, UserPlus } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Shield, Mail, Lock, ArrowRight, UserPlus, Sparkles } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 
 const AuthPage = () => {
   const navigate = useNavigate();
@@ -20,6 +21,17 @@ const AuthPage = () => {
   const redirectToDashboard = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
+      // Check if admin
+      const { data: adminRole } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .eq("role", "admin")
+        .maybeSingle();
+      if (adminRole) {
+        navigate("/admin/dashboard");
+        return;
+      }
       const { data: company } = await supabase
         .from("companies")
         .select("slug")
@@ -38,7 +50,7 @@ const AuthPage = () => {
         password: loginPassword,
       });
       if (error) throw error;
-      toast.success("Login realizado com sucesso!");
+      toast.success("Bem-vindo de volta! 👋");
       await redirectToDashboard();
     } catch (error: any) {
       toast.error("Erro ao entrar", { description: error.message });
@@ -60,8 +72,7 @@ const AuthPage = () => {
         password: signupPassword,
       });
       if (error) throw error;
-      toast.success("Conta criada com sucesso!");
-      // Auto-confirm is enabled — redirect immediately
+      toast.success("Conta criada com sucesso! 🎉");
       await redirectToDashboard();
     } catch (error: any) {
       toast.error("Erro ao criar conta", { description: error.message });
@@ -71,79 +82,90 @@ const AuthPage = () => {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 relative">
+      <div className="absolute inset-0 gradient-hero" />
+      <div className="absolute top-20 right-20 h-64 w-64 rounded-full bg-primary/5 blur-3xl" />
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="w-full max-w-sm relative"
+      >
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10">
-            <Shield className="h-5 w-5 text-primary" />
-          </div>
+          <Link to="/">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl gradient-primary shadow-hero">
+              <Shield className="h-6 w-6 text-primary-foreground" />
+            </div>
+          </Link>
           <h1 className="text-xl font-bold text-foreground">Portal Seguríssimo</h1>
-          <p className="text-sm text-muted-foreground">Acesse ou crie sua conta</p>
+          <p className="text-sm text-muted-foreground">Acesse ou crie sua conta ✨</p>
         </div>
 
-        <Tabs defaultValue="login" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-6">
-            <TabsTrigger value="login">Entrar</TabsTrigger>
-            <TabsTrigger value="signup">Criar conta</TabsTrigger>
-          </TabsList>
+        <div className="rounded-3xl border border-border/60 bg-card p-6 shadow-elevated">
+          <Tabs defaultValue="login" className="w-full">
+            <TabsList className="grid w-full grid-cols-2 mb-6 rounded-2xl">
+              <TabsTrigger value="login" className="rounded-xl">Entrar</TabsTrigger>
+              <TabsTrigger value="signup" className="rounded-xl">Criar conta</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="login">
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="login-email">E-mail</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="login-email" type="email" placeholder="seu@email.com" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="pl-10" required />
+            <TabsContent value="login">
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="login-email">E-mail</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input id="login-email" type="email" placeholder="seu@email.com" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="pl-10 rounded-xl" required />
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="login-password">Senha</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="login-password" type="password" placeholder="••••••••" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="pl-10" required />
+                <div className="space-y-2">
+                  <Label htmlFor="login-password">Senha</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input id="login-password" type="password" placeholder="••••••••" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="pl-10 rounded-xl" required />
+                  </div>
                 </div>
-              </div>
-              <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
-                {isLoading ? "Entrando..." : <> Entrar <ArrowRight className="ml-2 h-4 w-4" /></>}
-              </Button>
-            </form>
-          </TabsContent>
+                <Button type="submit" className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300" size="lg" disabled={isLoading}>
+                  {isLoading ? "Entrando..." : <> Entrar <ArrowRight className="ml-2 h-4 w-4" /></>}
+                </Button>
+              </form>
+            </TabsContent>
 
-          <TabsContent value="signup">
-            <form onSubmit={handleSignup} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="signup-email">E-mail</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="signup-email" type="email" placeholder="seu@email.com" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} className="pl-10" required />
+            <TabsContent value="signup">
+              <form onSubmit={handleSignup} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="signup-email">E-mail</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input id="signup-email" type="email" placeholder="seu@email.com" value={signupEmail} onChange={(e) => setSignupEmail(e.target.value)} className="pl-10 rounded-xl" required />
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="signup-password">Senha</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="signup-password" type="password" placeholder="Mínimo 6 caracteres" value={signupPassword} onChange={(e) => setSignupPassword(e.target.value)} className="pl-10" required minLength={6} />
+                <div className="space-y-2">
+                  <Label htmlFor="signup-password">Senha</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input id="signup-password" type="password" placeholder="Mínimo 6 caracteres" value={signupPassword} onChange={(e) => setSignupPassword(e.target.value)} className="pl-10 rounded-xl" required minLength={6} />
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="signup-confirm">Confirmar senha</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input id="signup-confirm" type="password" placeholder="Repita a senha" value={signupConfirm} onChange={(e) => setSignupConfirm(e.target.value)} className="pl-10" required minLength={6} />
+                <div className="space-y-2">
+                  <Label htmlFor="signup-confirm">Confirmar senha</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input id="signup-confirm" type="password" placeholder="Repita a senha" value={signupConfirm} onChange={(e) => setSignupConfirm(e.target.value)} className="pl-10 rounded-xl" required minLength={6} />
+                  </div>
                 </div>
-              </div>
-              <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
-                {isLoading ? "Criando..." : <><UserPlus className="mr-2 h-4 w-4" /> Criar conta</>}
-              </Button>
-            </form>
-          </TabsContent>
-        </Tabs>
+                <Button type="submit" className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300" size="lg" disabled={isLoading}>
+                  {isLoading ? "Criando..." : <><UserPlus className="mr-2 h-4 w-4" /> Criar conta</>}
+                </Button>
+              </form>
+            </TabsContent>
+          </Tabs>
+        </div>
 
-        <div className="mt-8 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+        <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground">
           <Shield className="h-3 w-3" />
           <span>Acesso protegido com criptografia</span>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
