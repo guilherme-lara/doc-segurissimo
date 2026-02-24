@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
-  Link as LinkIcon, Plus, Trash2, Tag
+  Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +19,9 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 
-// ─── Pre-defined document tags the professional can click to add ───
+// ─── Pre-defined document tags ───
 const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
   { label: "RG / CNH", stage: "Documentos Pessoais" },
   { label: "CPF", stage: "Documentos Pessoais" },
@@ -34,10 +35,10 @@ const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
   { label: "Certidão de Nascimento", stage: "Documentos Pessoais" },
 ];
 
-// ─── Quick templates ───
-const TEMPLATES: { name: string; items: { label: string; stage: string }[] }[] = [
+const TEMPLATES: { name: string; emoji: string; items: { label: string; stage: string }[] }[] = [
   {
     name: "Kit Admissão",
+    emoji: "📋",
     items: [
       { label: "RG / CNH", stage: "Documentos Pessoais" },
       { label: "CPF", stage: "Documentos Pessoais" },
@@ -46,6 +47,7 @@ const TEMPLATES: { name: string; items: { label: string; stage: string }[] }[] =
   },
   {
     name: "Kit Abertura PJ",
+    emoji: "🏢",
     items: [
       { label: "RG / CNH", stage: "Documentos Pessoais" },
       { label: "CPF", stage: "Documentos Pessoais" },
@@ -73,6 +75,9 @@ const DashboardPage = () => {
   const [clientEmail, setClientEmail] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
   const [customItemName, setCustomItemName] = useState("");
+
+  // Pro upgrade modal
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   // Auth check
   const { data: session } = useQuery({
@@ -104,6 +109,23 @@ const DashboardPage = () => {
     },
     enabled: !!slug,
   });
+
+  // Fetch plan
+  const { data: plan } = useQuery({
+    queryKey: ["plan", company?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("user_plans")
+        .select("*")
+        .eq("company_id", company!.id)
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!company?.id,
+  });
+
+  const isPro = plan?.plan === "pro";
 
   // Fetch requests
   const { data: requests, isLoading: requestsLoading } = useQuery({
@@ -148,7 +170,7 @@ const DashboardPage = () => {
 
   // ─── Tag-based checklist management ───
   const addDocumentTag = (label: string, stage: string) => {
-    if (checklistItems.some((i) => i.itemName === label)) return; // no dupes
+    if (checklistItems.some((i) => i.itemName === label)) return;
     setChecklistItems([...checklistItems, { stageName: stage, itemName: label }]);
   };
 
@@ -164,7 +186,7 @@ const DashboardPage = () => {
       }
     });
     setChecklistItems(merged);
-    toast.success(`Template "${template.name}" aplicado`);
+    toast.success(`Template "${template.name}" aplicado 🎉`);
   };
 
   const addCustomItem = () => {
@@ -178,11 +200,20 @@ const DashboardPage = () => {
     setCustomItemName("");
   };
 
+  // Check free plan limits
+  const activeRequestCount = requests?.filter((r: any) => r.status !== "completed").length ?? 0;
+  const maxRequests = plan?.max_active_requests ?? 5;
+
   // Create request mutation
   const createRequest = useMutation({
     mutationFn: async () => {
       if (!company) throw new Error("No company");
       if (!clientName.trim() || checklistItems.length === 0) throw new Error("Preencha o nome e adicione pelo menos um documento");
+
+      // Check limits for free plan
+      if (!isPro && activeRequestCount >= maxRequests) {
+        throw new Error(`Limite de ${maxRequests} solicitações ativas atingido. Faça upgrade para Pro! ✨`);
+      }
 
       const { data: req, error: reqError } = await supabase
         .from("document_requests")
@@ -208,9 +239,12 @@ const DashboardPage = () => {
       setClientName("");
       setClientEmail("");
       setChecklistItems([]);
-      toast.success("Solicitação criada com sucesso!");
+      toast.success("Solicitação criada com sucesso! 🎉");
     },
     onError: (err: any) => {
+      if (err.message.includes("Limite")) {
+        setUpgradeModalOpen(true);
+      }
       toast.error("Erro ao criar solicitação", { description: err.message });
     },
   });
@@ -228,7 +262,7 @@ const DashboardPage = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["company"] });
-      toast.success("Configurações salvas!");
+      toast.success("Configurações salvas! ✅");
     },
   });
 
@@ -236,7 +270,7 @@ const DashboardPage = () => {
     const link = `${window.location.origin}/${slug}/enviar/${requestId}`;
     navigator.clipboard.writeText(link);
     setCopiedId(requestId);
-    toast.success("Link copiado para a área de transferência!");
+    toast.success("Link copiado! 📋");
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -253,16 +287,29 @@ const DashboardPage = () => {
 
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
 
+  const handleProFeatureClick = () => {
+    if (!isPro) {
+      setUpgradeModalOpen(true);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Top bar */}
-      <header className="border-b border-border bg-card">
+      <header className="glass sticky top-0 z-50 border-b border-border/50">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-primary" />
-            <span className="text-sm font-semibold text-foreground">Portal Seguríssimo</span>
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl gradient-primary">
+              <Shield className="h-4 w-4 text-primary-foreground" />
+            </div>
+            <span className="text-sm font-bold text-foreground">Seguríssimo</span>
+            {isPro && (
+              <Badge variant="outline" className="text-xs border-pro/40 text-pro">
+                <Crown className="mr-1 h-3 w-3" /> Pro
+              </Badge>
+            )}
           </div>
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={handleLogout}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground transition-colors" onClick={handleLogout}>
             <LogOut className="mr-2 h-4 w-4" /> Sair
           </Button>
         </div>
@@ -270,126 +317,162 @@ const DashboardPage = () => {
 
       <main className="mx-auto max-w-5xl px-4 py-8">
         {/* Actions */}
-        <div className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between"
+        >
           <div>
             {companyLoading ? (
               <Skeleton className="h-8 w-48" />
             ) : (
               <>
-                <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-                <p className="text-sm text-muted-foreground">Gerencie suas solicitações de documentos</p>
+                <h1 className="text-2xl font-bold text-foreground">Dashboard 🏠</h1>
+                <p className="text-sm text-muted-foreground">
+                  Gerencie suas solicitações · {!isPro && <span className="text-primary cursor-pointer hover:underline" onClick={() => setUpgradeModalOpen(true)}>Upgrade para Pro ✨</span>}
+                </p>
               </>
             )}
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" /> Nova Solicitação
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Nova Solicitação de Documentos</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-5 mt-4">
-                <div className="space-y-2">
-                  <Label>Nome do Cliente</Label>
-                  <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Ex: João Silva" />
-                </div>
-                <div className="space-y-2">
-                  <Label>E-mail do Cliente (opcional)</Label>
-                  <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com" type="email" />
-                </div>
-
-                {/* Templates rápidos */}
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" /> Templates Prontos</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {TEMPLATES.map((tpl) => (
-                      <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} type="button">
-                        {tpl.name}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Document tags */}
-                <div className="space-y-2">
-                  <Label>Documentos Comuns</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {COMMON_DOCUMENTS.map((doc) => {
-                      const isAdded = checklistItems.some((i) => i.itemName === doc.label);
-                      return (
-                        <button
-                          key={doc.label}
-                          type="button"
-                          onClick={() => addDocumentTag(doc.label, doc.stage)}
-                          disabled={isAdded}
-                          className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                            isAdded
-                              ? "border-primary/30 bg-primary/10 text-primary cursor-default"
-                              : "border-border bg-card text-foreground hover:border-primary hover:bg-primary/5 cursor-pointer"
-                          }`}
-                        >
-                          {isAdded && <Check className="mr-1 h-3 w-3" />}
-                          {doc.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Custom document */}
-                <div className="space-y-2">
-                  <Label>Adicionar Outro</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Nome do documento..."
-                      value={customItemName}
-                      onChange={(e) => setCustomItemName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
-                    />
-                    <Button variant="outline" size="icon" onClick={addCustomItem} type="button">
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Selected items */}
-                {checklistItems.length > 0 && (
+          <div className="flex gap-2">
+            {/* Pro feature: Reminder */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl transition-all duration-200"
+              onClick={handleProFeatureClick}
+            >
+              {!isPro && <LockIcon className="mr-1.5 h-3 w-3" />}
+              Lembrete Mágico 🪄
+            </Button>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
+                  <Plus className="mr-2 h-4 w-4" /> Criar Solicitação ✨
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl">
+                <DialogHeader>
+                  <DialogTitle>Nova Solicitação 📄</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-5 mt-4">
                   <div className="space-y-2">
-                    <Label>Documentos selecionados ({checklistItems.length})</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {checklistItems.map((item, i) => (
-                        <Badge key={i} variant="secondary" className="gap-1 pr-1">
-                          {item.itemName}
-                          <button type="button" onClick={() => removeDocumentTag(i)} className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/20 transition-colors">
-                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                          </button>
-                        </Badge>
+                    <Label>Nome do Cliente</Label>
+                    <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Ex: João Silva" className="rounded-xl" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>E-mail do Cliente (opcional)</Label>
+                    <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com" type="email" className="rounded-xl" />
+                  </div>
+
+                  {/* Templates */}
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" /> Templates Prontos</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {TEMPLATES.map((tpl) => (
+                        <Button
+                          key={tpl.name}
+                          variant="outline"
+                          size="sm"
+                          onClick={() => applyTemplate(tpl)}
+                          type="button"
+                          className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200"
+                        >
+                          {tpl.emoji} {tpl.name}
+                        </Button>
                       ))}
                     </div>
                   </div>
-                )}
-              </div>
-              <DialogFooter className="mt-4">
-                <Button onClick={() => createRequest.mutate()} disabled={createRequest.isPending || checklistItems.length === 0}>
-                  {createRequest.isPending ? "Criando..." : "Criar Solicitação"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
+
+                  {/* Document tags */}
+                  <div className="space-y-2">
+                    <Label>Documentos Comuns</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {COMMON_DOCUMENTS.map((doc) => {
+                        const isAdded = checklistItems.some((i) => i.itemName === doc.label);
+                        return (
+                          <button
+                            key={doc.label}
+                            type="button"
+                            onClick={() => addDocumentTag(doc.label, doc.stage)}
+                            disabled={isAdded}
+                            className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
+                              isAdded
+                                ? "border-primary/30 bg-primary/10 text-primary cursor-default"
+                                : "border-border bg-card text-foreground hover:border-primary hover:bg-accent cursor-pointer hover:scale-[1.02]"
+                            }`}
+                          >
+                            {isAdded && <Check className="mr-1 h-3 w-3" />}
+                            {doc.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Custom document */}
+                  <div className="space-y-2">
+                    <Label>Adicionar Outro</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Nome do documento..."
+                        value={customItemName}
+                        onChange={(e) => setCustomItemName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
+                        className="rounded-xl"
+                      />
+                      <Button variant="outline" size="icon" onClick={addCustomItem} type="button" className="rounded-xl shrink-0">
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Selected items */}
+                  {checklistItems.length > 0 && (
+                    <div className="space-y-2">
+                      <Label>Documentos selecionados ({checklistItems.length})</Label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {checklistItems.map((item, i) => (
+                          <Badge key={i} variant="secondary" className="gap-1 pr-1 rounded-full">
+                            {item.itemName}
+                            <button type="button" onClick={() => removeDocumentTag(i)} className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/20 transition-colors">
+                              <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!isPro && (
+                    <p className="text-xs text-muted-foreground bg-accent/50 rounded-xl p-3">
+                      📊 Plano Free: {activeRequestCount}/{maxRequests} solicitações ativas
+                    </p>
+                  )}
+                </div>
+                <DialogFooter className="mt-4">
+                  <Button
+                    onClick={() => createRequest.mutate()}
+                    disabled={createRequest.isPending || checklistItems.length === 0}
+                    className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                  >
+                    {createRequest.isPending ? "Criando..." : "Criar Solicitação ✨"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </motion.div>
 
         <Tabs defaultValue="requests" className="w-full">
-          <TabsList className="mb-6">
-            <TabsTrigger value="requests">
+          <TabsList className="mb-6 rounded-2xl">
+            <TabsTrigger value="requests" className="rounded-xl">
               <LinkIcon className="mr-2 h-4 w-4" /> Solicitações
             </TabsTrigger>
-            <TabsTrigger value="files">
+            <TabsTrigger value="files" className="rounded-xl">
               <FileText className="mr-2 h-4 w-4" /> Arquivos
             </TabsTrigger>
-            <TabsTrigger value="settings">
+            <TabsTrigger value="settings" className="rounded-xl">
               <Settings className="mr-2 h-4 w-4" /> Configurações
             </TabsTrigger>
           </TabsList>
@@ -398,34 +481,44 @@ const DashboardPage = () => {
             <div className="space-y-3">
               {requestsLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-28 w-full rounded-xl" />
+                  <Skeleton key={i} className="h-28 w-full rounded-2xl" />
                 ))
               ) : requests?.length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <FileText className="mx-auto h-10 w-10 mb-3 text-border" />
-                  <p>Nenhuma solicitação criada ainda.</p>
-                  <p className="text-sm">Clique em "Nova Solicitação" para começar.</p>
-                </div>
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-center py-16 text-muted-foreground"
+                >
+                  <FileText className="mx-auto h-12 w-12 mb-4 text-border" />
+                  <p className="text-lg font-medium">Nenhum documento pendente por aqui! 🎉</p>
+                  <p className="text-sm mt-1">Que paz, hein? Clique em "Criar Solicitação" para começar.</p>
+                </motion.div>
               ) : (
-                requests?.map((req: any) => {
-                  const completed = req.request_items?.filter((i: any) => i.is_completed).length ?? 0;
+                requests?.map((req: any, i: number) => {
+                  const completed = req.request_items?.filter((item: any) => item.is_completed).length ?? 0;
                   const total = req.request_items?.length ?? 0;
                   return (
-                    <div key={req.id} className="rounded-xl border border-border bg-card p-5 shadow-card">
+                    <motion.div
+                      key={req.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.03 }}
+                      className="rounded-2xl border border-border/60 bg-card p-5 shadow-card hover:shadow-elevated transition-all duration-300"
+                    >
                       <div className="flex items-center justify-between mb-3">
                         <div>
                           <h3 className="font-semibold text-card-foreground">{req.client_name}</h3>
                           <p className="text-xs text-muted-foreground">{formatDate(req.created_at)}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
                             completed === total && total > 0
                               ? "bg-success/10 text-success"
-                              : "bg-muted text-muted-foreground"
+                              : "bg-accent text-accent-foreground"
                           }`}>
                             {completed}/{total} enviados
                           </span>
-                          <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)}>
+                          <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)} className="rounded-xl transition-all duration-200">
                             {copiedId === req.id ? (
                               <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</>
                             ) : (
@@ -436,14 +529,14 @@ const DashboardPage = () => {
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {req.request_items?.map((item: any) => (
-                          <span key={item.id} className={`text-xs px-2 py-0.5 rounded ${
+                          <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
                             item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                           }`}>
                             {item.item_name}
                           </span>
                         ))}
                       </div>
-                    </div>
+                    </motion.div>
                   );
                 })
               )}
@@ -451,7 +544,7 @@ const DashboardPage = () => {
           </TabsContent>
 
           <TabsContent value="files">
-            <div className="rounded-xl border border-border bg-card shadow-card overflow-hidden">
+            <div className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -473,8 +566,8 @@ const DashboardPage = () => {
                     ))
                   ) : uploads?.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                        Nenhum arquivo recebido ainda.
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-12">
+                        Nenhum arquivo recebido ainda 📭
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -484,7 +577,7 @@ const DashboardPage = () => {
                         <TableCell className="text-muted-foreground">{formatSize(file.file_size)}</TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(file.created_at)}</TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="sm">
+                          <Button variant="ghost" size="sm" className="rounded-xl">
                             <Download className="h-4 w-4" />
                           </Button>
                         </TableCell>
@@ -497,29 +590,54 @@ const DashboardPage = () => {
           </TabsContent>
 
           <TabsContent value="settings">
-            <div className="rounded-xl border border-border bg-card p-6 shadow-card">
-              <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta</h3>
+            <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+              <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
               <div className="space-y-4 max-w-md">
                 <div className="space-y-2">
                   <Label htmlFor="display-name">Nome de Exibição</Label>
-                  <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+                  <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="rounded-xl" />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="slug">Slug da URL</Label>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground whitespace-nowrap">/{""}</span>
-                    <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} />
+                    <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} className="rounded-xl" />
                     <span className="text-sm text-muted-foreground">/enviar</span>
                   </div>
                 </div>
-                <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending}>
-                  {updateSettings.isPending ? "Salvando..." : "Salvar alterações"}
+                <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl">
+                  {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
                 </Button>
               </div>
             </div>
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Pro Upgrade Modal */}
+      <Dialog open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl text-center">
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="h-16 w-16 rounded-3xl gradient-primary flex items-center justify-center shadow-hero">
+              <Crown className="h-8 w-8 text-primary-foreground" />
+            </div>
+            <h2 className="text-xl font-bold text-foreground">Desbloqueie o Pro ✨</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Solicitações ilimitadas, uploads de até 1GB, white-label, lembrete mágico e muito mais.
+            </p>
+            <div className="mt-2">
+              <span className="text-3xl font-extrabold text-foreground">R$49</span>
+              <span className="text-muted-foreground">/mês</span>
+            </div>
+            <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
+              Fazer Upgrade Agora 🚀
+            </Button>
+            <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Agora não
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

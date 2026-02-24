@@ -7,15 +7,17 @@ import Index from "./pages/Index";
 import AuthPage from "./pages/AuthPage";
 import ChecklistUploadPage from "./pages/ChecklistUploadPage";
 import DashboardPage from "./pages/DashboardPage";
+import AdminDashboard from "./pages/AdminDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
 /**
- * ARQUITETURA DE ROTAS — Portal Seguríssimo v2
+ * ARQUITETURA DE ROTAS — Portal Seguríssimo v3
  *
- * /                                → Landing page (vendas)
+ * /                                → Landing page (conversão B2B)
  * /auth/login                      → Login / Signup
+ * /admin/dashboard                 → Painel Admin (role: admin)
  * /:slug/enviar/:requestId         → Upload com checklist (link único)
  * /:slug/dashboard                 → Dashboard autenticado
  *
@@ -32,6 +34,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/auth/login" element={<AuthPage />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="/:slug/enviar/:requestId" element={<ChecklistUploadPage />} />
           <Route path="/:slug/dashboard" element={<DashboardPage />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
