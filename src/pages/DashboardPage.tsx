@@ -1,8 +1,27 @@
+/**
+ * DashboardPage — Painel do profissional
+ *
+ * Features:
+ * - Tabs de filtro (Todos / Pendentes / Aprovados / Rejeitados)
+ * - Busca rápida por nome de arquivo ou cliente
+ * - Agrupamento por etapas com Accordions
+ * - Preview modal de arquivos (imagem/PDF) com Aprovar/Rejeitar/Baixar
+ * - Audit log timeline (PRO)
+ * - Color picker de branding (PRO)
+ * - Botão Cloud Sync (PRO - visual)
+ * - Estilo "New Age" (glassmorphism, emojis, micro-interações)
+ *
+ * NOTA para migração:
+ * - Signed URLs via supabase.storage.createSignedUrl (substituir por endpoint próprio)
+ * - RLS policies documentadas em cada migration
+ */
+
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
-  Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon
+  Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
+  Search, Cloud, Palette, Filter
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,10 +35,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Accordion, AccordionContent, AccordionItem, AccordionTrigger,
+} from "@/components/ui/accordion";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
+import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 
 // ─── Pre-defined document tags ───
 const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
@@ -79,6 +103,23 @@ const DashboardPage = () => {
   // Pro upgrade modal
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
+  // Cloud sync modal
+  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
+
+  // File preview modal
+  const [previewFile, setPreviewFile] = useState<any>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Files tab filter + search
+  const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Audit log panel
+  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
+
+  // Branding color
+  const [brandColor, setBrandColor] = useState("#7c3aed");
+
   // Auth check
   const { data: session } = useQuery({
     queryKey: ["session"],
@@ -110,6 +151,10 @@ const DashboardPage = () => {
     enabled: !!slug,
   });
 
+  useEffect(() => {
+    if (company?.primary_color) setBrandColor(company.primary_color);
+  }, [company]);
+
   // Fetch plan
   const { data: plan } = useQuery({
     queryKey: ["plan", company?.id],
@@ -133,7 +178,7 @@ const DashboardPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("document_requests")
-        .select("*, request_items(id, item_name, is_completed)")
+        .select("*, request_items(id, item_name, stage_name, is_completed, sort_order)")
         .eq("company_id", company!.id)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -148,10 +193,18 @@ const DashboardPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("uploads")
-        .select("*")
+        .select("*, request_items!inner(item_name, stage_name, request_id, document_requests:request_id(client_name))")
         .eq("company_id", company!.id)
         .order("created_at", { ascending: false });
-      if (error) throw error;
+      if (error) {
+        // Fallback without join if schema issue
+        const { data: fallback } = await supabase
+          .from("uploads")
+          .select("*")
+          .eq("company_id", company!.id)
+          .order("created_at", { ascending: false });
+        return fallback ?? [];
+      }
       return data;
     },
     enabled: !!company?.id,
@@ -200,7 +253,6 @@ const DashboardPage = () => {
     setCustomItemName("");
   };
 
-  // Check free plan limits
   const activeRequestCount = requests?.filter((r: any) => r.status !== "completed").length ?? 0;
   const maxRequests = plan?.max_active_requests ?? 5;
 
@@ -209,8 +261,6 @@ const DashboardPage = () => {
     mutationFn: async () => {
       if (!company) throw new Error("No company");
       if (!clientName.trim() || checklistItems.length === 0) throw new Error("Preencha o nome e adicione pelo menos um documento");
-
-      // Check limits for free plan
       if (!isPro && activeRequestCount >= maxRequests) {
         throw new Error(`Limite de ${maxRequests} solicitações ativas atingido. Faça upgrade para Pro! ✨`);
       }
@@ -230,7 +280,6 @@ const DashboardPage = () => {
       }));
       const { error: itemsError } = await supabase.from("request_items").insert(items);
       if (itemsError) throw itemsError;
-
       return req;
     },
     onSuccess: () => {
@@ -242,9 +291,7 @@ const DashboardPage = () => {
       toast.success("Solicitação criada com sucesso! 🎉");
     },
     onError: (err: any) => {
-      if (err.message.includes("Limite")) {
-        setUpgradeModalOpen(true);
-      }
+      if (err.message.includes("Limite")) setUpgradeModalOpen(true);
       toast.error("Erro ao criar solicitação", { description: err.message });
     },
   });
@@ -255,7 +302,7 @@ const DashboardPage = () => {
       if (!company) return;
       const { error } = await supabase
         .from("companies")
-        .update({ display_name: displayName, slug: slugValue })
+        .update({ display_name: displayName, slug: slugValue, primary_color: brandColor })
         .eq("id", company.id);
       if (error) throw error;
       if (slugValue !== slug) navigate(`/${slugValue}/dashboard`);
@@ -288,10 +335,31 @@ const DashboardPage = () => {
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
 
   const handleProFeatureClick = () => {
-    if (!isPro) {
-      setUpgradeModalOpen(true);
-    }
+    if (!isPro) setUpgradeModalOpen(true);
   };
+
+  // Filter uploads
+  const filteredUploads = uploads?.filter((file: any) => {
+    const matchesFilter = fileFilter === "all" || file.status === fileFilter;
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = !query ||
+      file.file_name?.toLowerCase().includes(query) ||
+      file.request_items?.document_requests?.client_name?.toLowerCase().includes(query) ||
+      file.request_items?.item_name?.toLowerCase().includes(query);
+    return matchesFilter && matchesSearch;
+  }) ?? [];
+
+  // Group uploads by stage
+  const uploadsByStage = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
+    const stage = file.request_items?.stage_name ?? "Geral";
+    if (!acc[stage]) acc[stage] = [];
+    acc[stage].push(file);
+    return acc;
+  }, {});
+
+  const pendingCount = uploads?.filter((f: any) => f.status === "pending").length ?? 0;
+  const approvedCount = uploads?.filter((f: any) => f.status === "approved").length ?? 0;
+  const rejectedCount = uploads?.filter((f: any) => f.status === "rejected").length ?? 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -334,8 +402,19 @@ const DashboardPage = () => {
               </>
             )}
           </div>
-          <div className="flex gap-2">
-            {/* Pro feature: Reminder */}
+          <div className="flex gap-2 flex-wrap">
+            {/* Cloud Sync (PRO) */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl transition-all duration-200"
+              onClick={() => isPro ? setCloudSyncModalOpen(true) : setUpgradeModalOpen(true)}
+            >
+              {!isPro && <LockIcon className="mr-1.5 h-3 w-3" />}
+              <Cloud className="mr-1.5 h-3 w-3" />
+              Sincronizar Nuvem
+            </Button>
+            {/* Reminder */}
             <Button
               variant="outline"
               size="sm"
@@ -370,14 +449,7 @@ const DashboardPage = () => {
                     <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" /> Templates Prontos</Label>
                     <div className="flex flex-wrap gap-2">
                       {TEMPLATES.map((tpl) => (
-                        <Button
-                          key={tpl.name}
-                          variant="outline"
-                          size="sm"
-                          onClick={() => applyTemplate(tpl)}
-                          type="button"
-                          className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200"
-                        >
+                        <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} type="button" className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200">
                           {tpl.emoji} {tpl.name}
                         </Button>
                       ))}
@@ -477,6 +549,7 @@ const DashboardPage = () => {
             </TabsTrigger>
           </TabsList>
 
+          {/* ─── Solicitações Tab ─── */}
           <TabsContent value="requests">
             <div className="space-y-3">
               {requestsLoading ? (
@@ -484,11 +557,7 @@ const DashboardPage = () => {
                   <Skeleton key={i} className="h-28 w-full rounded-2xl" />
                 ))
               ) : requests?.length === 0 ? (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-center py-16 text-muted-foreground"
-                >
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-16 text-muted-foreground">
                   <FileText className="mx-auto h-12 w-12 mb-4 text-border" />
                   <p className="text-lg font-medium">Nenhum documento pendente por aqui! 🎉</p>
                   <p className="text-sm mt-1">Que paz, hein? Clique em "Criar Solicitação" para começar.</p>
@@ -497,6 +566,12 @@ const DashboardPage = () => {
                 requests?.map((req: any, i: number) => {
                   const completed = req.request_items?.filter((item: any) => item.is_completed).length ?? 0;
                   const total = req.request_items?.length ?? 0;
+                  const stageGroups = (req.request_items ?? []).reduce((acc: Record<string, any[]>, item: any) => {
+                    if (!acc[item.stage_name]) acc[item.stage_name] = [];
+                    acc[item.stage_name].push(item);
+                    return acc;
+                  }, {});
+
                   return (
                     <motion.div
                       key={req.id}
@@ -512,30 +587,73 @@ const DashboardPage = () => {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                            completed === total && total > 0
-                              ? "bg-success/10 text-success"
-                              : "bg-accent text-accent-foreground"
+                            completed === total && total > 0 ? "bg-success/10 text-success" : "bg-accent text-accent-foreground"
                           }`}>
                             {completed}/{total} enviados
                           </span>
                           <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)} className="rounded-xl transition-all duration-200">
-                            {copiedId === req.id ? (
-                              <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</>
-                            ) : (
-                              <><Copy className="mr-1 h-3 w-3" /> Copiar link</>
-                            )}
+                            {copiedId === req.id ? <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</> : <><Copy className="mr-1 h-3 w-3" /> Copiar link</>}
+                          </Button>
+                          {/* Audit log button (PRO) */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="rounded-xl text-xs"
+                            onClick={() => isPro ? setAuditRequestId(auditRequestId === req.id ? null : req.id) : setUpgradeModalOpen(true)}
+                          >
+                            {!isPro && <LockIcon className="mr-1 h-3 w-3" />}
+                            📜 Histórico
                           </Button>
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-1">
-                        {req.request_items?.map((item: any) => (
-                          <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
-                            item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
-                          }`}>
-                            {item.item_name}
-                          </span>
-                        ))}
-                      </div>
+
+                      {/* Stage-grouped items with accordion */}
+                      {Object.keys(stageGroups).length > 1 ? (
+                        <Accordion type="multiple" className="mt-2">
+                          {Object.entries(stageGroups).map(([stage, items]: [string, any[]]) => (
+                            <AccordionItem key={stage} value={stage} className="border-border/40">
+                              <AccordionTrigger className="text-xs font-semibold text-muted-foreground uppercase tracking-wider py-2 hover:no-underline">
+                                {stage} ({items.filter((i: any) => i.is_completed).length}/{items.length})
+                              </AccordionTrigger>
+                              <AccordionContent>
+                                <div className="flex flex-wrap gap-1">
+                                  {items.map((item: any) => (
+                                    <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                                      item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                                    }`}>
+                                      {item.item_name}
+                                    </span>
+                                  ))}
+                                </div>
+                              </AccordionContent>
+                            </AccordionItem>
+                          ))}
+                        </Accordion>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {req.request_items?.map((item: any) => (
+                            <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                              item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                            }`}>
+                              {item.item_name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Audit log timeline (inline, PRO only) */}
+                      {isPro && auditRequestId === req.id && company && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          className="mt-4 pt-4 border-t border-border/40"
+                        >
+                          <h4 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">
+                            📜 Histórico de Atividades
+                          </h4>
+                          <AuditLogTimeline requestId={req.id} companyId={company.id} />
+                        </motion.div>
+                      )}
                     </motion.div>
                   );
                 })
@@ -543,76 +661,208 @@ const DashboardPage = () => {
             </div>
           </TabsContent>
 
+          {/* ─── Arquivos Tab (with filter tabs + search + stage grouping + preview) ─── */}
           <TabsContent value="files">
-            <div className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Arquivo</TableHead>
-                    <TableHead>Tamanho</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead className="text-right">Ação</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {uploadsLoading ? (
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <TableRow key={i}>
-                        <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                        <TableCell><Skeleton className="h-4 w-20" /></TableCell>
-                        <TableCell><Skeleton className="h-4 w-8 ml-auto" /></TableCell>
-                      </TableRow>
-                    ))
-                  ) : uploads?.length === 0 ? (
+            {/* Search + Filter bar */}
+            <div className="mb-4 flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar por nome do arquivo ou cliente..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10 rounded-xl"
+                />
+              </div>
+            </div>
+
+            {/* Sub-tabs for status filter */}
+            <div className="mb-4 flex gap-2 flex-wrap">
+              {([
+                { key: "all", label: "Todos", count: uploads?.length ?? 0 },
+                { key: "pending", label: "Pendentes ⏳", count: pendingCount },
+                { key: "approved", label: "Aprovados ✅", count: approvedCount },
+                { key: "rejected", label: "Rejeitados ❌", count: rejectedCount },
+              ] as const).map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setFileFilter(tab.key)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
+                    fileFilter === tab.key
+                      ? "gradient-primary text-primary-foreground shadow-hero"
+                      : "bg-card border border-border/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  }`}
+                >
+                  {tab.label} ({tab.count})
+                </button>
+              ))}
+            </div>
+
+            {/* Files grouped by stage */}
+            {uploadsLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-16 w-full rounded-2xl" />
+                ))}
+              </div>
+            ) : filteredUploads.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <FileText className="mx-auto h-10 w-10 mb-3 text-border" />
+                <p className="text-sm">Nenhum arquivo encontrado 📭</p>
+              </div>
+            ) : Object.keys(uploadsByStage).length > 1 ? (
+              <Accordion type="multiple" defaultValue={Object.keys(uploadsByStage)} className="space-y-2">
+                {Object.entries(uploadsByStage).map(([stage, files]) => (
+                  <AccordionItem key={stage} value={stage} className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
+                    <AccordionTrigger className="px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider hover:no-underline">
+                      {stage} ({files.length})
+                    </AccordionTrigger>
+                    <AccordionContent className="px-0 pb-0">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Arquivo</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Tamanho</TableHead>
+                            <TableHead>Data</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {files.map((file: any) => (
+                            <TableRow
+                              key={file.id}
+                              className="cursor-pointer hover:bg-accent/50 transition-colors"
+                              onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}
+                            >
+                              <TableCell className="font-medium">{file.file_name}</TableCell>
+                              <TableCell>
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                  file.status === "approved" ? "bg-success/10 text-success" :
+                                  file.status === "rejected" ? "bg-destructive/10 text-destructive" :
+                                  "bg-accent text-accent-foreground"
+                                }`}>
+                                  {file.status === "approved" ? "✅" : file.status === "rejected" ? "❌" : "⏳"}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">{formatSize(file.file_size)}</TableCell>
+                              <TableCell className="text-muted-foreground">{formatDate(file.created_at)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            ) : (
+              <div className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center text-muted-foreground py-12">
-                        Nenhum arquivo recebido ainda 📭
-                      </TableCell>
+                      <TableHead>Arquivo</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Tamanho</TableHead>
+                      <TableHead>Data</TableHead>
                     </TableRow>
-                  ) : (
-                    uploads?.map((file: any) => (
-                      <TableRow key={file.id}>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredUploads.map((file: any) => (
+                      <TableRow
+                        key={file.id}
+                        className="cursor-pointer hover:bg-accent/50 transition-colors"
+                        onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}
+                      >
                         <TableCell className="font-medium">{file.file_name}</TableCell>
+                        <TableCell>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                            file.status === "approved" ? "bg-success/10 text-success" :
+                            file.status === "rejected" ? "bg-destructive/10 text-destructive" :
+                            "bg-accent text-accent-foreground"
+                          }`}>
+                            {file.status === "approved" ? "✅" : file.status === "rejected" ? "❌" : "⏳"}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-muted-foreground">{formatSize(file.file_size)}</TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(file.created_at)}</TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" className="rounded-xl">
-                            <Download className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </TabsContent>
 
+          {/* ─── Settings Tab (with PRO branding color picker) ─── */}
           <TabsContent value="settings">
-            <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
-              <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
-              <div className="space-y-4 max-w-md">
-                <div className="space-y-2">
-                  <Label htmlFor="display-name">Nome de Exibição</Label>
-                  <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="rounded-xl" />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="slug">Slug da URL</Label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground whitespace-nowrap">/{""}</span>
-                    <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} className="rounded-xl" />
-                    <span className="text-sm text-muted-foreground">/enviar</span>
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label htmlFor="display-name">Nome de Exibição</Label>
+                    <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="rounded-xl" />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="slug">Slug da URL</Label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">/{""}</span>
+                      <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} className="rounded-xl" />
+                      <span className="text-sm text-muted-foreground">/enviar</span>
+                    </div>
+                  </div>
+                  <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl">
+                    {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
+                  </Button>
                 </div>
-                <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl">
-                  {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
-                </Button>
+              </div>
+
+              {/* PRO: Branding Color Picker */}
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <div className="flex items-center gap-2 mb-4">
+                  <Palette className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Branding Avançado</h3>
+                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Personalize a cor primária da tela que seus clientes veem 🎨
+                </p>
+                <div className="flex items-center gap-4 max-w-md">
+                  <div className="relative">
+                    <input
+                      type="color"
+                      value={brandColor}
+                      onChange={(e) => isPro ? setBrandColor(e.target.value) : setUpgradeModalOpen(true)}
+                      className="h-10 w-10 rounded-xl border border-border cursor-pointer"
+                      disabled={!isPro}
+                    />
+                  </div>
+                  <Input
+                    value={brandColor}
+                    onChange={(e) => isPro ? setBrandColor(e.target.value) : undefined}
+                    className="rounded-xl max-w-[120px] font-mono text-sm"
+                    disabled={!isPro}
+                    readOnly={!isPro}
+                  />
+                  <div className="h-10 w-10 rounded-xl border border-border" style={{ backgroundColor: brandColor }} />
+                  {!isPro && (
+                    <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setUpgradeModalOpen(true)}>
+                      <LockIcon className="mr-1.5 h-3 w-3" /> Desbloquear
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* File Preview Modal */}
+      <FilePreviewModal
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        file={previewFile}
+        onStatusChange={() => queryClient.invalidateQueries({ queryKey: ["uploads"] })}
+      />
 
       {/* Pro Upgrade Modal */}
       <Dialog open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen}>
@@ -623,7 +873,7 @@ const DashboardPage = () => {
             </div>
             <h2 className="text-xl font-bold text-foreground">Desbloqueie o Pro ✨</h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Solicitações ilimitadas, uploads de até 1GB, white-label, lembrete mágico e muito mais.
+              Solicitações ilimitadas, uploads de até 1GB, white-label, lembrete mágico, logs de auditoria e muito mais.
             </p>
             <div className="mt-2">
               <span className="text-3xl font-extrabold text-foreground">R$49</span>
@@ -634,6 +884,27 @@ const DashboardPage = () => {
             </Button>
             <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Agora não
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cloud Sync Modal (Coming Soon) */}
+      <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl text-center">
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="h-16 w-16 rounded-3xl bg-accent flex items-center justify-center">
+              <Cloud className="h-8 w-8 text-accent-foreground" />
+            </div>
+            <h2 className="text-xl font-bold text-foreground">Sincronizar Nuvem ☁️</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Em breve! Sincronize automaticamente os arquivos aprovados direto para seu Google Drive ou OneDrive.
+            </p>
+            <Badge variant="outline" className="text-xs border-pro/40 text-pro">
+              <Crown className="mr-1 h-3 w-3" /> Exclusivo Pro · Em breve
+            </Badge>
+            <button onClick={() => setCloudSyncModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors mt-2">
+              Entendi
             </button>
           </div>
         </DialogContent>

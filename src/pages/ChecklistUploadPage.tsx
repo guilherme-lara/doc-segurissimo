@@ -7,30 +7,23 @@
  *
  * 1. Storage bucket "uploads":
  *    - INSERT público: qualquer pessoa pode fazer upload de arquivos
- *      Policy: uploads_storage_public_insert → WITH CHECK (bucket_id = 'uploads')
  *    - SELECT/DELETE restrito ao owner da company (auth.uid())
  *
  * 2. Tabela public.uploads:
  *    - INSERT público (uploads_public_insert) → WITH CHECK (true)
- *      Justificativa: o cliente não está autenticado; validação é feita
- *      pelo fato de que ele precisa de um request_item_id válido.
  *    - SELECT/DELETE restrito ao owner da company
+ *    - Trigger on_upload_audit_log cria entrada no audit_logs automaticamente
  *
  * 3. Tabela public.request_items:
  *    - SELECT público (request_items_public_read) → USING (true)
- *    - UPDATE restrito ao owner. A marcação de is_completed é feita por
- *      trigger SECURITY DEFINER (mark_item_completed_on_upload) que dispara
- *      automaticamente após INSERT na tabela uploads.
+ *    - Trigger mark_item_completed_on_upload auto-marca is_completed
  *
- * 4. Tabela public.user_plans:
- *    - SELECT público para verificar marca d'água (watermark)
- *
- * Para migração futura (jotatechinfo.com.br), replicar essas policies
- * no PostgreSQL nativo. O MinIO/storage local precisa de middleware
- * equivalente para autorizar uploads anônimos.
+ * 4. Tabela public.audit_logs:
+ *    - INSERT público (triggers SECURITY DEFINER criam logs)
+ *    - SELECT restrito ao owner + admin
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Shield, Upload, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { Progress } from "@/components/ui/progress";
@@ -39,6 +32,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
 
 interface RequestItem {
   id: string;
@@ -59,6 +53,29 @@ const ChecklistUploadPage = () => {
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  // File preview state: staged files per item before upload
+  const [stagedFiles, setStagedFiles] = useState<Record<string, File>>({});
+
+  // ─── Global drag prevention (prevents browser opening file on missed drop) ───
+  useEffect(() => {
+    const preventDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("dragover", preventDrop);
+    window.addEventListener("drop", preventDrop);
+    return () => {
+      window.removeEventListener("dragover", preventDrop);
+      window.removeEventListener("drop", preventDrop);
+    };
+  }, []);
+
+  // ─── Cleanup ObjectURLs on unmount ───
+  useEffect(() => {
+    return () => {
+      // staged files are File objects, ObjectURLs are managed in FilePreviewThumbnail
+    };
+  }, []);
 
   // Fetch company by slug
   const { data: company, isLoading: companyLoading } = useQuery({
@@ -66,7 +83,7 @@ const ChecklistUploadPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("companies")
-        .select("id, display_name, slug, logo_url")
+        .select("id, display_name, slug, logo_url, primary_color")
         .eq("slug", slug)
         .single();
       if (error) throw error;
@@ -131,15 +148,27 @@ const ChecklistUploadPage = () => {
     return acc;
   }, {}) ?? {};
 
-  const handleFileUpload = async (itemId: string, file: File) => {
-    if (!company || !request) return;
-
-    // Check file size limit
+  // Stage a file for preview (don't upload yet)
+  const stageFile = (itemId: string, file: File) => {
     const maxMb = plan?.max_file_size_mb ?? 50;
     if (file.size > maxMb * 1024 * 1024) {
       toast.error(`Arquivo muito grande`, { description: `Limite de ${maxMb}MB por arquivo.` });
       return;
     }
+    setStagedFiles((prev) => ({ ...prev, [itemId]: file }));
+  };
+
+  const removeStagedFile = (itemId: string) => {
+    setStagedFiles((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+  };
+
+  const confirmUpload = async (itemId: string) => {
+    const file = stagedFiles[itemId];
+    if (!file || !company || !request) return;
 
     setUploadingItemId(itemId);
     setUploadProgress(10);
@@ -147,23 +176,15 @@ const ChecklistUploadPage = () => {
     try {
       const timestamp = Date.now();
       const filePath = `${company.id}/${request.id}/${itemId}/${timestamp}_${file.name}`;
-
       setUploadProgress(30);
 
-      // 1. Upload to storage (RLS: uploads_storage_public_insert)
       const { error: storageError } = await supabase.storage
         .from("uploads")
         .upload(filePath, file, { upsert: false });
 
-      if (storageError) {
-        console.error("Storage upload error:", storageError);
-        throw new Error(`Falha no envio: ${storageError.message}`);
-      }
-
+      if (storageError) throw new Error(`Falha no envio: ${storageError.message}`);
       setUploadProgress(60);
 
-      // 2. Insert upload record (RLS: uploads_public_insert WITH CHECK true)
-      // Trigger mark_item_completed_on_upload auto-sets is_completed=true
       const { error: dbError } = await supabase.from("uploads").insert({
         request_item_id: itemId,
         company_id: company.id,
@@ -173,21 +194,17 @@ const ChecklistUploadPage = () => {
         content_type: file.type || "application/octet-stream",
       });
 
-      if (dbError) {
-        console.error("DB insert error:", dbError);
-        throw new Error(`Falha ao registrar: ${dbError.message}`);
-      }
-
+      if (dbError) throw new Error(`Falha ao registrar: ${dbError.message}`);
       setUploadProgress(100);
       toast.success(`"${file.name}" enviado! ✅`);
 
       setTimeout(() => {
         setUploadingItemId(null);
         setUploadProgress(0);
+        removeStagedFile(itemId);
         refetchItems();
       }, 600);
     } catch (err: any) {
-      console.error("Upload error:", err);
       toast.error("Erro no upload 😔", { description: err.message });
       setUploadingItemId(null);
       setUploadProgress(0);
@@ -211,10 +228,12 @@ const ChecklistUploadPage = () => {
     e.stopPropagation();
     setDragOverItemId(null);
     const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(itemId, file);
-  }, [company, request, plan]);
+    if (file) stageFile(itemId, file);
+  }, [plan]);
 
-  // Loading state
+  // Apply custom branding color if PRO
+  const brandColor = company?.primary_color;
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
@@ -233,7 +252,6 @@ const ChecklistUploadPage = () => {
     );
   }
 
-  // Invalid link
   if (!requestId || !request) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
@@ -254,7 +272,6 @@ const ChecklistUploadPage = () => {
     );
   }
 
-  // All completed
   if (totalCount > 0 && completedCount === totalCount) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
@@ -286,7 +303,10 @@ const ChecklistUploadPage = () => {
           animate={{ opacity: 1, y: 0 }}
           className="mb-8 flex flex-col items-center gap-3 text-center"
         >
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl gradient-primary shadow-hero">
+          <div
+            className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-hero ${!brandColor ? 'gradient-primary' : ''}`}
+            style={brandColor ? { background: brandColor } : undefined}
+          >
             <Shield className="h-6 w-6 text-primary-foreground" />
           </div>
           <div>
@@ -321,44 +341,44 @@ const ChecklistUploadPage = () => {
               {stageName}
             </h3>
             <div className="space-y-2">
-              {stageItems.map((item, i) => (
-                <motion.div
-                  key={item.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  onDragOver={(e) => !item.is_completed && handleDragOver(e, item.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => !item.is_completed && handleDrop(e, item.id)}
-                  className={`flex items-center gap-3 rounded-2xl border p-4 transition-all duration-200 ${
-                    item.is_completed
-                      ? "border-success/30 bg-success/5"
-                      : dragOverItemId === item.id
-                        ? "border-primary bg-primary/5 ring-2 ring-primary/20 scale-[1.01]"
-                        : "border-border/60 bg-card shadow-card hover:shadow-elevated"
-                  }`}
-                >
-                  {item.is_completed ? (
-                    <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
-                  ) : (
-                    <div className="h-5 w-5 shrink-0 rounded-full border-2 border-border" />
-                  )}
+              {stageItems.map((item, i) => {
+                const staged = stagedFiles[item.id];
+                const isUploading = uploadingItemId === item.id;
 
-                  <span
-                    className={`flex-1 text-sm font-medium ${
-                      item.is_completed ? "text-success line-through" : "text-card-foreground"
-                    }`}
+                return (
+                  <motion.div
+                    key={item.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.03 }}
                   >
-                    {item.item_name}
-                  </span>
-
-                  {!item.is_completed && (
-                    <>
-                      {uploadingItemId === item.id ? (
-                        <div className="w-24">
-                          <Progress value={uploadProgress} className="h-1.5 rounded-full" />
-                        </div>
+                    <div
+                      onDragOver={(e) => !item.is_completed && handleDragOver(e, item.id)}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => !item.is_completed && handleDrop(e, item.id)}
+                      className={`flex items-center gap-3 rounded-2xl border p-4 transition-all duration-200 ${
+                        item.is_completed
+                          ? "border-success/30 bg-success/5"
+                          : dragOverItemId === item.id
+                            ? "border-primary bg-primary/5 ring-2 ring-primary/20 scale-[1.01]"
+                            : "border-border/60 bg-card shadow-card hover:shadow-elevated"
+                      }`}
+                    >
+                      {item.is_completed ? (
+                        <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
                       ) : (
+                        <div className="h-5 w-5 shrink-0 rounded-full border-2 border-border" />
+                      )}
+
+                      <span
+                        className={`flex-1 text-sm font-medium ${
+                          item.is_completed ? "text-success line-through" : "text-card-foreground"
+                        }`}
+                      >
+                        {item.item_name}
+                      </span>
+
+                      {!item.is_completed && !staged && !isUploading && (
                         <label className="cursor-pointer">
                           <span className="inline-flex items-center gap-1.5 rounded-xl gradient-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200">
                             <Upload className="h-3 w-3" />
@@ -369,16 +389,27 @@ const ChecklistUploadPage = () => {
                             className="hidden"
                             onChange={(e) => {
                               const file = e.target.files?.[0];
-                              if (file) handleFileUpload(item.id, file);
+                              if (file) stageFile(item.id, file);
                               e.target.value = "";
                             }}
                           />
                         </label>
                       )}
-                    </>
-                  )}
-                </motion.div>
-              ))}
+                    </div>
+
+                    {/* File preview thumbnail */}
+                    {staged && (
+                      <FilePreviewThumbnail
+                        file={staged}
+                        onRemove={() => removeStagedFile(item.id)}
+                        onConfirm={() => confirmUpload(item.id)}
+                        isUploading={isUploading}
+                        uploadProgress={uploadProgress}
+                      />
+                    )}
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
         ))}

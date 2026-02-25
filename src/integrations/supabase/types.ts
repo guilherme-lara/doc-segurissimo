@@ -14,12 +14,58 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action: string
+          company_id: string
+          created_at: string
+          details: string | null
+          id: string
+          ip_address: string | null
+          request_id: string | null
+        }
+        Insert: {
+          action: string
+          company_id: string
+          created_at?: string
+          details?: string | null
+          id?: string
+          ip_address?: string | null
+          request_id?: string | null
+        }
+        Update: {
+          action?: string
+          company_id?: string
+          created_at?: string
+          details?: string | null
+          id?: string
+          ip_address?: string | null
+          request_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_logs_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "document_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       companies: {
         Row: {
           created_at: string
           display_name: string
           id: string
           logo_url: string | null
+          primary_color: string | null
           slug: string
           updated_at: string
           user_id: string
@@ -29,6 +75,7 @@ export type Database = {
           display_name: string
           id?: string
           logo_url?: string | null
+          primary_color?: string | null
           slug: string
           updated_at?: string
           user_id: string
@@ -38,6 +85,7 @@ export type Database = {
           display_name?: string
           id?: string
           logo_url?: string | null
+          primary_color?: string | null
           slug?: string
           updated_at?: string
           user_id?: string
@@ -131,6 +179,7 @@ export type Database = {
           id: string
           request_item_id: string
           sender_name: string | null
+          status: string
         }
         Insert: {
           company_id: string
@@ -142,6 +191,7 @@ export type Database = {
           id?: string
           request_item_id: string
           sender_name?: string | null
+          status?: string
         }
         Update: {
           company_id?: string
@@ -153,6 +203,7 @@ export type Database = {
           id?: string
           request_item_id?: string
           sender_name?: string | null
+          status?: string
         }
         Relationships: [
           {
