@@ -3,14 +3,19 @@
  *
  * Exibe imagens via <img> e PDFs via <iframe>.
  * Botões de Aprovar (✅), Rejeitar (❌) e Baixar (⬇️).
- * Usa Signed URLs do Storage para acessar arquivos privados.
+ * Rejeição inclui campo de motivo (rejection_reason).
  *
  * NOTA para migração: O Signed URL é gerado via supabase.storage.createSignedUrl.
  * No servidor próprio, usar endpoint equivalente com autenticação JWT.
+ *
+ * SCHEMA: uploads.rejection_reason TEXT (nullable)
+ * Quando status='rejected', o motivo é salvo e exibido ao cliente.
  */
 import { useState, useEffect } from "react";
-import { CheckCircle2, XCircle, Download, FileText, Loader2, X } from "lucide-react";
+import { CheckCircle2, XCircle, Download, FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -27,6 +32,7 @@ interface FilePreviewModalProps {
     file_size: number;
     content_type: string | null;
     status: string;
+    rejection_reason?: string | null;
     created_at: string;
   } | null;
   onStatusChange?: () => void;
@@ -36,6 +42,8 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
 
   const isImage = file?.content_type?.startsWith("image/");
   const isPdf = file?.content_type === "application/pdf";
@@ -43,6 +51,8 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
   useEffect(() => {
     if (!open || !file) {
       setSignedUrl(null);
+      setShowRejectForm(false);
+      setRejectionReason("");
       return;
     }
     setLoading(true);
@@ -51,7 +61,6 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       .createSignedUrl(file.file_path, 300)
       .then(({ data, error }) => {
         if (error) {
-          console.error("Signed URL error:", error);
           toast.error("Erro ao carregar preview");
         } else {
           setSignedUrl(data.signedUrl);
@@ -60,19 +69,41 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       });
   }, [open, file]);
 
-  const handleStatusChange = async (status: "approved" | "rejected") => {
+  const handleApprove = async () => {
     if (!file) return;
     setUpdating(true);
     const { error } = await supabase
       .from("uploads")
-      .update({ status })
+      .update({ status: "approved", rejection_reason: null } as any)
       .eq("id", file.id);
     setUpdating(false);
     if (error) {
-      toast.error("Erro ao atualizar status");
+      toast.error("Erro ao aprovar");
       return;
     }
-    toast.success(status === "approved" ? "Arquivo aprovado ✅" : "Arquivo rejeitado ❌");
+    toast.success("Arquivo aprovado ✅");
+    onStatusChange?.();
+    onOpenChange(false);
+  };
+
+  const handleReject = async () => {
+    if (!file || !rejectionReason.trim()) {
+      toast.warning("Informe o motivo da rejeição");
+      return;
+    }
+    setUpdating(true);
+    const { error } = await supabase
+      .from("uploads")
+      .update({ status: "rejected", rejection_reason: rejectionReason.trim() } as any)
+      .eq("id", file.id);
+    setUpdating(false);
+    if (error) {
+      toast.error("Erro ao rejeitar");
+      return;
+    }
+    toast.success("Arquivo rejeitado ❌");
+    setShowRejectForm(false);
+    setRejectionReason("");
     onStatusChange?.();
     onOpenChange(false);
   };
@@ -136,33 +167,73 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
           </span>
         </div>
 
+        {/* Rejection reason display */}
+        {file?.status === "rejected" && file?.rejection_reason && (
+          <div className="rounded-xl bg-destructive/5 border border-destructive/20 p-3 text-sm text-destructive">
+            <strong>Motivo:</strong> {file.rejection_reason}
+          </div>
+        )}
+
+        {/* Rejection form */}
+        {showRejectForm && (
+          <div className="space-y-2">
+            <Label className="text-sm">Motivo da rejeição ❌</Label>
+            <Textarea
+              placeholder="Ex: Documento ilegível, faltando assinatura..."
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              className="rounded-xl resize-none"
+              rows={3}
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                className="rounded-xl flex-1"
+                onClick={handleReject}
+                disabled={updating || !rejectionReason.trim()}
+              >
+                {updating ? "Rejeitando..." : "Confirmar Rejeição ❌"}
+              </Button>
+              <Button
+                variant="outline"
+                className="rounded-xl"
+                onClick={() => { setShowRejectForm(false); setRejectionReason(""); }}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Action buttons */}
-        <div className="flex gap-2 mt-3">
-          <Button
-            variant="outline"
-            className="flex-1 rounded-xl"
-            onClick={() => handleStatusChange("approved")}
-            disabled={updating || file?.status === "approved"}
-          >
-            <CheckCircle2 className="mr-2 h-4 w-4 text-success" /> Aprovar
-          </Button>
-          <Button
-            variant="outline"
-            className="flex-1 rounded-xl"
-            onClick={() => handleStatusChange("rejected")}
-            disabled={updating || file?.status === "rejected"}
-          >
-            <XCircle className="mr-2 h-4 w-4 text-destructive" /> Rejeitar
-          </Button>
-          <Button
-            variant="outline"
-            className="rounded-xl"
-            onClick={handleDownload}
-            disabled={!signedUrl}
-          >
-            <Download className="h-4 w-4" />
-          </Button>
-        </div>
+        {!showRejectForm && (
+          <div className="flex gap-2 mt-3">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-xl"
+              onClick={handleApprove}
+              disabled={updating || file?.status === "approved"}
+            >
+              <CheckCircle2 className="mr-2 h-4 w-4 text-success" /> Aprovar
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 rounded-xl"
+              onClick={() => setShowRejectForm(true)}
+              disabled={updating}
+            >
+              <XCircle className="mr-2 h-4 w-4 text-destructive" /> Rejeitar
+            </Button>
+            <Button
+              variant="outline"
+              className="rounded-xl"
+              onClick={handleDownload}
+              disabled={!signedUrl}
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

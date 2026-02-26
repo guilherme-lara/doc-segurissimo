@@ -61,30 +61,36 @@ export type Database = {
       }
       companies: {
         Row: {
+          cnpj: string | null
           created_at: string
           display_name: string
           id: string
           logo_url: string | null
+          phone: string | null
           primary_color: string | null
           slug: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          cnpj?: string | null
           created_at?: string
           display_name: string
           id?: string
           logo_url?: string | null
+          phone?: string | null
           primary_color?: string | null
           slug: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          cnpj?: string | null
           created_at?: string
           display_name?: string
           id?: string
           logo_url?: string | null
+          phone?: string | null
           primary_color?: string | null
           slug?: string
           updated_at?: string
@@ -94,6 +100,7 @@ export type Database = {
       }
       document_requests: {
         Row: {
+          access_password: string | null
           client_email: string | null
           client_name: string
           company_id: string
@@ -103,6 +110,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          access_password?: string | null
           client_email?: string | null
           client_name: string
           company_id: string
@@ -112,6 +120,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          access_password?: string | null
           client_email?: string | null
           client_name?: string
           company_id?: string
@@ -177,6 +186,7 @@ export type Database = {
           file_path: string
           file_size: number
           id: string
+          rejection_reason: string | null
           request_item_id: string
           sender_name: string | null
           status: string
@@ -189,6 +199,7 @@ export type Database = {
           file_path: string
           file_size: number
           id?: string
+          rejection_reason?: string | null
           request_item_id: string
           sender_name?: string | null
           status?: string
@@ -201,6 +212,7 @@ export type Database = {
           file_path?: string
           file_size?: number
           id?: string
+          rejection_reason?: string | null
           request_item_id?: string
           sender_name?: string | null
           status?: string

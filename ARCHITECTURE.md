@@ -65,6 +65,8 @@ CREATE TABLE public.companies (
   slug TEXT NOT NULL UNIQUE,
   display_name TEXT NOT NULL,
   logo_url TEXT,
+  cnpj TEXT,
+  phone TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -118,6 +120,7 @@ CREATE TABLE public.document_requests (
   client_name TEXT NOT NULL,
   client_email TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed')),
+  access_password TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -170,6 +173,8 @@ CREATE TABLE public.uploads (
   file_path TEXT NOT NULL,
   content_type TEXT,
   sender_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  rejection_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE public.uploads ENABLE ROW LEVEL SECURITY;
@@ -261,6 +266,20 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 CREATE TRIGGER on_upload_inserted AFTER INSERT ON public.uploads
   FOR EACH ROW EXECUTE FUNCTION public.mark_item_completed_on_upload();
+
+-- Desmarcar item quando upload é rejeitado (cliente pode reenviar)
+CREATE OR REPLACE FUNCTION public.unmark_item_on_rejection()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status AND NEW.status = 'rejected' THEN
+    UPDATE public.request_items SET is_completed = false WHERE id = NEW.request_item_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE TRIGGER on_upload_rejected AFTER UPDATE ON public.uploads
+  FOR EACH ROW EXECUTE FUNCTION public.unmark_item_on_rejection();
 ```
 
 ---
@@ -282,10 +301,12 @@ Edge function `seed-admin` cria o usuário e atribui a role automaticamente.
 | Feature | Free | Pro |
 |---|---|---|
 | Solicitações ativas | 5 | Ilimitado |
-| Upload máximo | 50MB | 1GB |
+| Upload máximo | 50MB | 2GB |
 | Marca d'água | ✅ Sim | ❌ Removida |
-| Lembrete Mágico | ❌ | ✅ |
+| Lembrete Mágico (WhatsApp) | ❌ | ✅ |
 | Senha no link | ❌ | ✅ |
+| White-label (logo, cor, CNPJ) | ❌ | ✅ |
+| Motivo de rejeição visível | ✅ | ✅ |
 
 ---
 
