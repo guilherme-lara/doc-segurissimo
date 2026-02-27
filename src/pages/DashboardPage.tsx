@@ -20,12 +20,13 @@
  * - document_requests.access_password: senha em texto simples (migrar para hash em produção)
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
-  Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2
+  Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
+  Archive, Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -97,6 +98,7 @@ const DashboardPage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
 
   // New request dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -398,6 +400,44 @@ const DashboardPage = () => {
     await supabase.auth.signOut();
     navigate("/");
   };
+
+  const handleDownloadZip = useCallback(async (requestId: string, clientName: string) => {
+    setDownloadingZipId(requestId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Sessão expirada. Faça login novamente.");
+        return;
+      }
+
+      const res = await supabase.functions.invoke("download-zip", {
+        body: { requestId },
+      });
+
+      if (res.error) {
+        const errorMsg = typeof res.error === "object" && "message" in res.error
+          ? (res.error as any).message
+          : "Erro ao gerar ZIP";
+        toast.error(errorMsg);
+        return;
+      }
+
+      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${clientName} - Aprovados.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Download iniciado! 📦");
+    } catch (err: any) {
+      toast.error("Erro ao baixar ZIP", { description: err.message });
+    } finally {
+      setDownloadingZipId(null);
+    }
+  }, []);
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -707,6 +747,21 @@ const DashboardPage = () => {
                           >
                             {!isPro && <LockIcon className="mr-1 h-3 w-3" />}
                             📜 Histórico
+                          </Button>
+                          {/* Download ZIP approved files */}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="rounded-xl transition-all duration-200"
+                            disabled={downloadingZipId === req.id}
+                            onClick={() => handleDownloadZip(req.id, req.client_name)}
+                          >
+                            {downloadingZipId === req.id ? (
+                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            ) : (
+                              <Archive className="mr-1 h-3 w-3" />
+                            )}
+                            Baixar ZIP 📦
                           </Button>
                         </div>
                       </div>
