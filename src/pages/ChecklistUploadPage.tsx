@@ -155,22 +155,51 @@ const ChecklistUploadPage = () => {
     enabled: !!requestId,
   });
 
-  // Fetch uploads to get rejection reasons and statuses
+  // Fetch uploads filtered by this request's item IDs
+  const itemIds = useMemo(() => items?.map((i) => i.id) ?? [], [items]);
+
   const { data: uploads, refetch: refetchUploads } = useQuery({
-    queryKey: ["client-uploads", requestId],
+    queryKey: ["client-uploads", requestId, itemIds],
     queryFn: async () => {
+      if (itemIds.length === 0) return [] as UploadRecord[];
       const { data, error } = await supabase
         .from("uploads")
         .select("id, request_item_id, status, rejection_reason, file_name")
-        .eq("company_id", company!.id)
+        .in("request_item_id", itemIds)
         .order("created_at", { ascending: false });
       if (error) return [] as UploadRecord[];
       return (data ?? []) as UploadRecord[];
     },
-    enabled: !!company?.id,
+    enabled: itemIds.length > 0,
   });
+  // Realtime: listen for changes on request_items and uploads
+  useEffect(() => {
+    if (!requestId || !items || items.length === 0) return;
 
-  // Map: itemId -> latest upload (for rejection info)
+    const channel = supabase
+      .channel(`checklist-${requestId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "request_items", filter: `request_id=eq.${requestId}` },
+        () => { refetchItems(); }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "uploads" },
+        (payload) => {
+          const itemId = (payload.new as any)?.request_item_id ?? (payload.old as any)?.request_item_id;
+          if (itemId && items.some((i) => i.id === itemId)) {
+            refetchUploads();
+            refetchItems();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [requestId, items?.length]);
+
+
   const uploadsByItem = useMemo(() => {
     const map: Record<string, UploadRecord> = {};
     if (!uploads) return map;
