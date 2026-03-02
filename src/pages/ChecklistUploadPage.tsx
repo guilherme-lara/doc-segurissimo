@@ -32,10 +32,11 @@
  */
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper } from "lucide-react";
+import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Type } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
@@ -50,6 +51,8 @@ interface RequestItem {
   stage_name: string;
   is_completed: boolean;
   sort_order: number;
+  item_type: string;
+  text_answer: string | null;
 }
 
 interface UploadRecord {
@@ -65,6 +68,7 @@ interface DocumentRequest {
   client_name: string;
   company_id: string;
   access_password: string | null;
+  expires_at: string | null;
 }
 
 const ChecklistUploadPage = () => {
@@ -131,10 +135,11 @@ const ChecklistUploadPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("document_requests")
-        .select("id, client_name, company_id, access_password")
+        .select("id, client_name, company_id, access_password, expires_at")
         .eq("id", requestId)
         .single();
       if (error) throw error;
+      console.log("[checklist] Request loaded:", { id: data.id, expires_at: data.expires_at, hasPassword: !!data.access_password });
       return data as DocumentRequest;
     },
     enabled: !!requestId,
@@ -146,10 +151,11 @@ const ChecklistUploadPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("request_items")
-        .select("id, item_name, stage_name, is_completed, sort_order")
+        .select("id, item_name, stage_name, is_completed, sort_order, item_type, text_answer")
         .eq("request_id", requestId)
         .order("sort_order", { ascending: true });
       if (error) throw error;
+      console.log("[checklist] Items loaded:", data?.length, "items");
       return data as RequestItem[];
     },
     enabled: !!requestId,
@@ -367,6 +373,29 @@ const ChecklistUploadPage = () => {
     );
   }
 
+  // Link expiration check
+  const isExpired = request.expires_at && new Date(request.expires_at) < new Date();
+  if (isExpired) {
+    console.log("[checklist] Link expired:", request.expires_at);
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-4 text-center max-w-sm"
+        >
+          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
+            <Clock className="h-8 w-8 text-destructive" />
+          </div>
+          <h2 className="text-xl font-bold text-foreground">Link Expirado ⏰</h2>
+          <p className="text-muted-foreground">
+            Este link de envio de documentos expirou. Solicite um novo link ao seu profissional.
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
+
   // Password protection screen
   if (needsPassword) {
     return (
@@ -532,7 +561,8 @@ const ChecklistUploadPage = () => {
                 const isRejected = itemStatus === "rejected";
                 const rejectionReason = uploadsByItem[item.id]?.rejection_reason;
                 const isApproved = itemStatus === "approved";
-                const canUpload = !item.is_completed || isRejected;
+                const isTextItem = item.item_type === "text";
+                const canUpload = !isTextItem && (!item.is_completed || isRejected);
 
                 return (
                   <motion.div
@@ -584,6 +614,32 @@ const ChecklistUploadPage = () => {
                           </p>
                         )}
                       </div>
+
+                      {/* Text input for text-type items */}
+                      {isTextItem && !item.is_completed && (
+                        <div className="flex gap-2 shrink-0 w-full max-w-[200px]">
+                          <Textarea
+                            placeholder="Digite sua resposta..."
+                            className="rounded-xl text-xs min-h-[36px] h-9"
+                            defaultValue={item.text_answer ?? ""}
+                            onBlur={async (e) => {
+                              const answer = e.target.value.trim();
+                              if (!answer) return;
+                              console.log("[checklist] Saving text answer for item:", item.id);
+                              const { error } = await supabase
+                                .from("request_items")
+                                .update({ text_answer: answer, is_completed: true })
+                                .eq("id", item.id);
+                              if (error) { toast.error("Erro ao salvar resposta"); return; }
+                              toast.success("Resposta salva! ✅");
+                              refetchItems();
+                            }}
+                          />
+                        </div>
+                      )}
+                      {isTextItem && item.is_completed && item.text_answer && (
+                        <span className="text-xs text-success shrink-0">✅ Respondido</span>
+                      )}
 
                       {canUpload && !staged && !isUploading && (
                         <label className="cursor-pointer shrink-0">

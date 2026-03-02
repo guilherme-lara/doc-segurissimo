@@ -1,23 +1,26 @@
 /**
- * DashboardPage — Painel do profissional
+ * DashboardPage — Painel do profissional (v4)
  *
  * Features:
+ * - View modes: Lista / Kanban
  * - Tabs de filtro (Todos / Pendentes / Aprovados / Rejeitados)
  * - Busca rápida por nome de arquivo ou cliente
  * - Agrupamento por etapas com Accordions
  * - Preview modal de arquivos com Aprovar/Rejeitar(+motivo)/Baixar
  * - Audit log timeline (PRO)
  * - Color picker de branding (PRO)
- * - Botão Cloud Sync (PRO - visual)
+ * - OwnCloud Sync (PRO - WebDAV)
  * - Lembrete Mágico via WhatsApp (PRO)
  * - Senha de acesso no link (PRO)
+ * - Link com expiração (PRO)
+ * - Campos de texto no checklist
  * - Branding: Logo URL, CNPJ, Telefone, Cor (PRO)
- * - Limites: 50MB free, 2GB pro
  *
  * NOTA para migração:
  * - Signed URLs via supabase.storage.createSignedUrl (substituir por endpoint próprio)
  * - RLS policies documentadas em cada migration
  * - document_requests.access_password: senha em texto simples (migrar para hash em produção)
+ * - OwnCloud WebDAV: credenciais em companies.owncloud_url/user/token
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -26,7 +29,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2
+  Archive, Loader2, LayoutList, Kanban, Clock, Type
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +53,8 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
 import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
+import KanbanView from "@/components/dashboard/KanbanView";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 // ─── Pre-defined document tags ───
 const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
@@ -91,6 +96,7 @@ const TEMPLATES: { name: string; emoji: string; items: { label: string; stage: s
 interface ChecklistItem {
   stageName: string;
   itemName: string;
+  itemType: "file" | "text";
 }
 
 const DashboardPage = () => {
@@ -100,19 +106,25 @@ const DashboardPage = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
 
+  // View mode
+  const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
+
   // New request dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
   const [customItemName, setCustomItemName] = useState("");
+  const [customItemType, setCustomItemType] = useState<"file" | "text">("file");
   const [passwordProtect, setPasswordProtect] = useState(false);
   const [accessPassword, setAccessPassword] = useState("");
+  const [linkExpiration, setLinkExpiration] = useState(false);
+  const [expirationDays, setExpirationDays] = useState(7);
 
   // Pro upgrade modal
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
-  // Cloud sync modal
+  // Cloud sync modal (OwnCloud)
   const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
 
   // File preview modal
@@ -131,6 +143,11 @@ const DashboardPage = () => {
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [phone, setPhone] = useState("");
+
+  // OwnCloud config
+  const [owncloudUrl, setOwncloudUrl] = useState("");
+  const [owncloudUser, setOwncloudUser] = useState("");
+  const [owncloudToken, setOwncloudToken] = useState("");
 
   // Auth check
   const { data: session } = useQuery({
@@ -169,6 +186,9 @@ const DashboardPage = () => {
       setLogoUrl(company.logo_url ?? "");
       setCnpj((company as any).cnpj ?? "");
       setPhone((company as any).phone ?? "");
+      setOwncloudUrl((company as any).owncloud_url ?? "");
+      setOwncloudUser((company as any).owncloud_user ?? "");
+      setOwncloudToken((company as any).owncloud_token ?? "");
     }
   }, [company]);
 
@@ -240,7 +260,7 @@ const DashboardPage = () => {
   // ─── Tag-based checklist management ───
   const addDocumentTag = (label: string, stage: string) => {
     if (checklistItems.some((i) => i.itemName === label)) return;
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: label }]);
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: label, itemType: "file" }]);
   };
 
   const removeDocumentTag = (index: number) => {
@@ -251,7 +271,7 @@ const DashboardPage = () => {
     const merged = [...checklistItems];
     template.items.forEach((t) => {
       if (!merged.some((m) => m.itemName === t.label)) {
-        merged.push({ stageName: t.stage, itemName: t.label });
+        merged.push({ stageName: t.stage, itemName: t.label, itemType: "file" });
       }
     });
     setChecklistItems(merged);
@@ -265,7 +285,7 @@ const DashboardPage = () => {
       toast.warning("Documento já adicionado");
       return;
     }
-    setChecklistItems([...checklistItems, { stageName: "Outros", itemName: name }]);
+    setChecklistItems([...checklistItems, { stageName: "Outros", itemName: name, itemType: customItemType }]);
     setCustomItemName("");
   };
 
@@ -291,6 +311,15 @@ const DashboardPage = () => {
         insertData.access_password = accessPassword.trim();
       }
 
+      // Link expiration (PRO)
+      if (isPro && linkExpiration && expirationDays > 0) {
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + expirationDays);
+        insertData.expires_at = expiresAt.toISOString();
+        console.log("[create-request] Link expires at:", insertData.expires_at);
+      }
+
+      console.log("[create-request] Creating request:", insertData);
       const { data: req, error: reqError } = await supabase
         .from("document_requests")
         .insert(insertData)
@@ -303,7 +332,9 @@ const DashboardPage = () => {
         stage_name: item.stageName,
         item_name: item.itemName,
         sort_order: i,
+        item_type: item.itemType,
       }));
+      console.log("[create-request] Creating items:", items);
       const { error: itemsError } = await supabase.from("request_items").insert(items);
       if (itemsError) throw itemsError;
       return req;
@@ -316,6 +347,8 @@ const DashboardPage = () => {
       setChecklistItems([]);
       setPasswordProtect(false);
       setAccessPassword("");
+      setLinkExpiration(false);
+      setExpirationDays(7);
       toast.success("Solicitação criada com sucesso! 🎉");
     },
     onError: (err: any) => {
@@ -324,7 +357,7 @@ const DashboardPage = () => {
     },
   });
 
-  // Update settings
+  // Update settings (includes OwnCloud config)
   const updateSettings = useMutation({
     mutationFn: async () => {
       if (!company) return;
@@ -336,6 +369,13 @@ const DashboardPage = () => {
         cnpj: cnpj || null,
         phone: phone || null,
       };
+      // OwnCloud config (PRO only)
+      if (isPro) {
+        updateData.owncloud_url = owncloudUrl || null;
+        updateData.owncloud_user = owncloudUser || null;
+        updateData.owncloud_token = owncloudToken || null;
+      }
+      console.log("[settings] Saving:", updateData);
       const { error } = await supabase
         .from("companies")
         .update(updateData)
@@ -365,15 +405,13 @@ const DashboardPage = () => {
     }
 
     const allItems = req.request_items ?? [];
-    // Get uploads for this request to check statuses
     const requestUploads = uploads?.filter((u: any) =>
       allItems.some((item: any) => item.id === u.request_item_id)
     ) ?? [];
 
-    // Items that are pending or rejected
     const pendingItems = allItems.filter((item: any) => {
       const upload = requestUploads.find((u: any) => u.request_item_id === item.id);
-      if (!upload) return true; // never uploaded
+      if (!upload) return true;
       return upload.status === "pending" || upload.status === "rejected";
     });
 
@@ -387,7 +425,6 @@ const DashboardPage = () => {
     const message = `Olá! 👋 Passando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\nAcesse seu link seguro para enviar: ${link}`;
     const encoded = encodeURIComponent(message);
 
-    // If we have the client email as phone placeholder, use it
     const clientPhone = req.client_email?.replace(/\D/g, "") ?? "";
     const waUrl = clientPhone
       ? `https://wa.me/${clientPhone}?text=${encoded}`
@@ -401,7 +438,7 @@ const DashboardPage = () => {
     navigate("/");
   };
 
-  const handleDownloadZip = useCallback(async (requestId: string, clientName: string) => {
+  const handleDownloadZip = useCallback(async (requestId: string, clientNameArg: string) => {
     setDownloadingZipId(requestId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -410,6 +447,7 @@ const DashboardPage = () => {
         return;
       }
 
+      console.log("[download-zip] Starting for request:", requestId);
       const res = await supabase.functions.invoke("download-zip", {
         body: { requestId },
       });
@@ -426,7 +464,7 @@ const DashboardPage = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${clientName} - Aprovados.zip`;
+      a.download = `${clientNameArg} - Aprovados.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -473,7 +511,7 @@ const DashboardPage = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Top bar */}
-      <header className="glass sticky top-0 z-50 border-b border-border/50">
+      <header className="glass sticky top-0 z-50 border-b border-border/40">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl gradient-primary">
@@ -486,9 +524,12 @@ const DashboardPage = () => {
               </Badge>
             )}
           </div>
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground transition-colors" onClick={handleLogout}>
-            <LogOut className="mr-2 h-4 w-4" /> Sair
-          </Button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground transition-colors" onClick={handleLogout}>
+              <LogOut className="mr-2 h-4 w-4" /> Sair
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -504,7 +545,7 @@ const DashboardPage = () => {
               <Skeleton className="h-8 w-48" />
             ) : (
               <>
-                <h1 className="text-2xl font-bold text-foreground">Dashboard 🏠</h1>
+                <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
                 <p className="text-sm text-muted-foreground">
                   Gerencie suas solicitações · {!isPro && <span className="text-primary cursor-pointer hover:underline" onClick={() => setUpgradeModalOpen(true)}>Upgrade para Pro ✨</span>}
                 </p>
@@ -521,13 +562,13 @@ const DashboardPage = () => {
             >
               {!isPro && <LockIcon className="mr-1.5 h-3 w-3" />}
               <Cloud className="mr-1.5 h-3 w-3" />
-              Sincronizar Nuvem
+              ownCloud
             </Button>
             {/* Create request */}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                  <Plus className="mr-2 h-4 w-4" /> Criar Solicitação ✨
+                  <Plus className="mr-2 h-4 w-4" /> Criar Solicitação
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl">
@@ -582,31 +623,44 @@ const DashboardPage = () => {
                     </div>
                   </div>
 
-                  {/* Custom document */}
+                  {/* Custom document with type selector */}
                   <div className="space-y-2">
-                    <Label>Adicionar Outro</Label>
+                    <Label>Adicionar Item Personalizado</Label>
                     <div className="flex gap-2">
                       <Input
-                        placeholder="Nome do documento..."
+                        placeholder={customItemType === "text" ? "Ex: Qual seu CPF?" : "Nome do documento..."}
                         value={customItemName}
                         onChange={(e) => setCustomItemName(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
                         className="rounded-xl"
                       />
+                      <Button
+                        variant={customItemType === "text" ? "default" : "outline"}
+                        size="icon"
+                        onClick={() => setCustomItemType(customItemType === "file" ? "text" : "file")}
+                        type="button"
+                        className="rounded-xl shrink-0"
+                        title={customItemType === "text" ? "Campo de texto" : "Upload de arquivo"}
+                      >
+                        {customItemType === "text" ? <Type className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                      </Button>
                       <Button variant="outline" size="icon" onClick={addCustomItem} type="button" className="rounded-xl shrink-0">
                         <Plus className="h-4 w-4" />
                       </Button>
                     </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {customItemType === "text" ? "📝 Campo de texto — o cliente digitará a resposta" : "📎 Upload de arquivo — o cliente enviará um documento"}
+                    </p>
                   </div>
 
                   {/* Selected items */}
                   {checklistItems.length > 0 && (
                     <div className="space-y-2">
-                      <Label>Documentos selecionados ({checklistItems.length})</Label>
+                      <Label>Itens selecionados ({checklistItems.length})</Label>
                       <div className="flex flex-wrap gap-1.5">
                         {checklistItems.map((item, i) => (
                           <Badge key={i} variant="secondary" className="gap-1 pr-1 rounded-full">
-                            {item.itemName}
+                            {item.itemType === "text" ? "📝" : "📎"} {item.itemName}
                             <button type="button" onClick={() => removeDocumentTag(i)} className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/20 transition-colors">
                               <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
                             </button>
@@ -623,10 +677,7 @@ const DashboardPage = () => {
                         id="password-protect"
                         checked={passwordProtect}
                         onCheckedChange={(checked) => {
-                          if (!isPro) {
-                            setUpgradeModalOpen(true);
-                            return;
-                          }
+                          if (!isPro) { setUpgradeModalOpen(true); return; }
                           setPasswordProtect(!!checked);
                         }}
                       />
@@ -643,6 +694,37 @@ const DashboardPage = () => {
                         onChange={(e) => setAccessPassword(e.target.value)}
                         className="rounded-xl mt-2"
                       />
+                    )}
+                  </div>
+
+                  {/* Link expiration (PRO) */}
+                  <div className="space-y-2 rounded-xl border border-border/60 p-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="link-expiration"
+                        checked={linkExpiration}
+                        onCheckedChange={(checked) => {
+                          if (!isPro) { setUpgradeModalOpen(true); return; }
+                          setLinkExpiration(!!checked);
+                        }}
+                      />
+                      <Label htmlFor="link-expiration" className="text-sm flex items-center gap-1.5 cursor-pointer">
+                        <Clock className="h-3.5 w-3.5" /> Expirar link após X dias
+                        {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
+                      </Label>
+                    </div>
+                    {linkExpiration && isPro && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={expirationDays}
+                          onChange={(e) => setExpirationDays(Number(e.target.value))}
+                          className="rounded-xl w-20"
+                        />
+                        <span className="text-sm text-muted-foreground">dias</span>
+                      </div>
                     )}
                   </div>
 
@@ -681,19 +763,55 @@ const DashboardPage = () => {
 
           {/* ─── Solicitações Tab ─── */}
           <TabsContent value="requests">
-            <div className="space-y-3">
-              {requestsLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
+            {/* View mode toggle */}
+            <div className="flex items-center gap-2 mb-4">
+              <Button
+                variant={viewMode === "list" ? "default" : "outline"}
+                size="sm"
+                className="rounded-xl"
+                onClick={() => setViewMode("list")}
+              >
+                <LayoutList className="mr-1.5 h-3.5 w-3.5" /> Lista
+              </Button>
+              <Button
+                variant={viewMode === "kanban" ? "default" : "outline"}
+                size="sm"
+                className="rounded-xl"
+                onClick={() => setViewMode("kanban")}
+              >
+                <Kanban className="mr-1.5 h-3.5 w-3.5" /> Kanban
+              </Button>
+            </div>
+
+            {requestsLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
                   <Skeleton key={i} className="h-28 w-full rounded-2xl" />
-                ))
-              ) : requests?.length === 0 ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-16 text-muted-foreground">
-                  <FileText className="mx-auto h-12 w-12 mb-4 text-border" />
-                  <p className="text-lg font-medium">Nenhum documento pendente por aqui! 🎉</p>
-                  <p className="text-sm mt-1">Que paz, hein? Clique em "Criar Solicitação" para começar.</p>
-                </motion.div>
-              ) : (
-                requests?.map((req: any, i: number) => {
+                ))}
+              </div>
+            ) : requests?.length === 0 ? (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-16 text-muted-foreground">
+                <FileText className="mx-auto h-12 w-12 mb-4 text-border" />
+                <p className="text-lg font-medium">Nenhum documento pendente por aqui! 🎉</p>
+                <p className="text-sm mt-1">Que paz, hein? Clique em "Criar Solicitação" para começar.</p>
+              </motion.div>
+            ) : viewMode === "kanban" ? (
+              <KanbanView
+                requests={requests ?? []}
+                uploads={uploads ?? []}
+                isPro={isPro}
+                slug={slug ?? ""}
+                copiedId={copiedId}
+                downloadingZipId={downloadingZipId}
+                onCopy={handleCopy}
+                onReminder={handleMagicReminder}
+                onDownloadZip={handleDownloadZip}
+                onUpgradeModal={() => setUpgradeModalOpen(true)}
+                formatDate={formatDate}
+              />
+            ) : (
+              <div className="space-y-3">
+                {requests?.map((req: any, i: number) => {
                   const completed = req.request_items?.filter((item: any) => item.is_completed).length ?? 0;
                   const total = req.request_items?.length ?? 0;
                   const stageGroups = (req.request_items ?? []).reduce((acc: Record<string, any[]>, item: any) => {
@@ -701,6 +819,7 @@ const DashboardPage = () => {
                     acc[item.stage_name].push(item);
                     return acc;
                   }, {});
+                  const isExpired = req.expires_at && new Date(req.expires_at) < new Date();
 
                   return (
                     <motion.div
@@ -708,13 +827,19 @@ const DashboardPage = () => {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: i * 0.03 }}
-                      className="rounded-2xl border border-border/60 bg-card p-5 shadow-card hover:shadow-elevated transition-all duration-300"
+                      className={`rounded-2xl border bg-card p-5 shadow-card hover:shadow-elevated transition-all duration-300 ${isExpired ? "border-destructive/30 opacity-70" : "border-border/60"}`}
                     >
                       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                         <div>
                           <h3 className="font-semibold text-card-foreground flex items-center gap-2">
                             {req.client_name}
-                            {(req as any).access_password && <LockIcon className="h-3.5 w-3.5 text-pro" />}
+                            {req.access_password && <LockIcon className="h-3.5 w-3.5 text-pro" />}
+                            {isExpired && <Badge variant="destructive" className="text-[10px]">Expirado</Badge>}
+                            {req.expires_at && !isExpired && (
+                              <Badge variant="outline" className="text-[10px] border-pro/40 text-pro">
+                                <Clock className="mr-0.5 h-2.5 w-2.5" /> {formatDate(req.expires_at)}
+                              </Badge>
+                            )}
                           </h3>
                           <p className="text-xs text-muted-foreground">{formatDate(req.created_at)}</p>
                         </div>
@@ -727,46 +852,20 @@ const DashboardPage = () => {
                           <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)} className="rounded-xl transition-all duration-200">
                             {copiedId === req.id ? <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</> : <><Copy className="mr-1 h-3 w-3" /> Copiar link</>}
                           </Button>
-                          {/* Magic Reminder */}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="rounded-xl transition-all duration-200"
-                            onClick={() => handleMagicReminder(req)}
-                          >
+                          <Button variant="outline" size="sm" className="rounded-xl transition-all duration-200" onClick={() => handleMagicReminder(req)}>
                             {!isPro && <LockIcon className="mr-1 h-3 w-3" />}
-                            <MessageCircle className="mr-1 h-3 w-3" />
-                            Lembrete 🪄
+                            <MessageCircle className="mr-1 h-3 w-3" /> Lembrete 🪄
                           </Button>
-                          {/* Audit log button (PRO) */}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="rounded-xl text-xs"
-                            onClick={() => isPro ? setAuditRequestId(auditRequestId === req.id ? null : req.id) : setUpgradeModalOpen(true)}
-                          >
-                            {!isPro && <LockIcon className="mr-1 h-3 w-3" />}
-                            📜 Histórico
+                          <Button variant="ghost" size="sm" className="rounded-xl text-xs" onClick={() => isPro ? setAuditRequestId(auditRequestId === req.id ? null : req.id) : setUpgradeModalOpen(true)}>
+                            {!isPro && <LockIcon className="mr-1 h-3 w-3" />} 📜 Histórico
                           </Button>
-                          {/* Download ZIP approved files */}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="rounded-xl transition-all duration-200"
-                            disabled={downloadingZipId === req.id}
-                            onClick={() => handleDownloadZip(req.id, req.client_name)}
-                          >
-                            {downloadingZipId === req.id ? (
-                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                            ) : (
-                              <Archive className="mr-1 h-3 w-3" />
-                            )}
-                            Baixar ZIP 📦
+                          <Button variant="outline" size="sm" className="rounded-xl transition-all duration-200" disabled={downloadingZipId === req.id} onClick={() => handleDownloadZip(req.id, req.client_name)}>
+                            {downloadingZipId === req.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Archive className="mr-1 h-3 w-3" />} Baixar ZIP 📦
                           </Button>
                         </div>
                       </div>
 
-                      {/* Stage-grouped items with accordion */}
+                      {/* Stage-grouped items */}
                       {Object.keys(stageGroups).length > 1 ? (
                         <Accordion type="multiple" className="mt-2">
                           {Object.entries(stageGroups).map(([stage, items]: [string, any[]]) => (
@@ -800,24 +899,22 @@ const DashboardPage = () => {
                         </div>
                       )}
 
-                      {/* Audit log timeline (inline, PRO only) */}
+                      {/* Audit log timeline */}
                       {isPro && auditRequestId === req.id && company && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: "auto" }}
                           className="mt-4 pt-4 border-t border-border/40"
                         >
-                          <h4 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">
-                            📜 Histórico de Atividades
-                          </h4>
+                          <h4 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">📜 Histórico de Atividades</h4>
                           <AuditLogTimeline requestId={req.id} companyId={company.id} />
                         </motion.div>
                       )}
                     </motion.div>
                   );
-                })
-              )}
-            </div>
+                })}
+              </div>
+            )}
           </TabsContent>
 
           {/* ─── Arquivos Tab ─── */}
@@ -825,12 +922,7 @@ const DashboardPage = () => {
             <div className="mb-4 flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar por nome do arquivo ou cliente..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 rounded-xl"
-                />
+                <Input placeholder="Buscar por nome do arquivo ou cliente..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 rounded-xl" />
               </div>
             </div>
 
@@ -885,11 +977,7 @@ const DashboardPage = () => {
                         </TableHeader>
                         <TableBody>
                           {files.map((file: any) => (
-                            <TableRow
-                              key={file.id}
-                              className="cursor-pointer hover:bg-accent/50 transition-colors"
-                              onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}
-                            >
+                            <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
                               <TableCell className="font-medium">{file.file_name}</TableCell>
                               <TableCell>
                                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -923,11 +1011,7 @@ const DashboardPage = () => {
                   </TableHeader>
                   <TableBody>
                     {filteredUploads.map((file: any) => (
-                      <TableRow
-                        key={file.id}
-                        className="cursor-pointer hover:bg-accent/50 transition-colors"
-                        onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}
-                      >
+                      <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
                         <TableCell className="font-medium">{file.file_name}</TableCell>
                         <TableCell>
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -980,51 +1064,21 @@ const DashboardPage = () => {
                 <div className="space-y-4 max-w-md">
                   <div className="space-y-2">
                     <Label>Logo URL</Label>
-                    <Input
-                      placeholder="https://minha-empresa.com/logo.png"
-                      value={logoUrl}
-                      onChange={(e) => isPro ? setLogoUrl(e.target.value) : setUpgradeModalOpen(true)}
-                      className="rounded-xl"
-                      disabled={!isPro}
-                    />
+                    <Input placeholder="https://minha-empresa.com/logo.png" value={logoUrl} onChange={(e) => isPro ? setLogoUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
                   </div>
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> CNPJ</Label>
-                    <Input
-                      placeholder="00.000.000/0001-00"
-                      value={cnpj}
-                      onChange={(e) => isPro ? setCnpj(e.target.value) : setUpgradeModalOpen(true)}
-                      className="rounded-xl"
-                      disabled={!isPro}
-                    />
+                    <Input placeholder="00.000.000/0001-00" value={cnpj} onChange={(e) => isPro ? setCnpj(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
                   </div>
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" /> Telefone de Contato</Label>
-                    <Input
-                      placeholder="(14) 99999-9999"
-                      value={phone}
-                      onChange={(e) => isPro ? setPhone(e.target.value) : setUpgradeModalOpen(true)}
-                      className="rounded-xl"
-                      disabled={!isPro}
-                    />
+                    <Input placeholder="(14) 99999-9999" value={phone} onChange={(e) => isPro ? setPhone(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
                   </div>
                   <div className="space-y-2">
                     <Label>Cor da Marca</Label>
                     <div className="flex items-center gap-4">
-                      <input
-                        type="color"
-                        value={brandColor}
-                        onChange={(e) => isPro ? setBrandColor(e.target.value) : setUpgradeModalOpen(true)}
-                        className="h-10 w-10 rounded-xl border border-border cursor-pointer"
-                        disabled={!isPro}
-                      />
-                      <Input
-                        value={brandColor}
-                        onChange={(e) => isPro ? setBrandColor(e.target.value) : undefined}
-                        className="rounded-xl max-w-[120px] font-mono text-sm"
-                        disabled={!isPro}
-                        readOnly={!isPro}
-                      />
+                      <input type="color" value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : setUpgradeModalOpen(true)} className="h-10 w-10 rounded-xl border border-border cursor-pointer" disabled={!isPro} />
+                      <Input value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : undefined} className="rounded-xl max-w-[120px] font-mono text-sm" disabled={!isPro} readOnly={!isPro} />
                       <div className="h-10 w-10 rounded-xl border border-border" style={{ backgroundColor: brandColor }} />
                       {!isPro && (
                         <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setUpgradeModalOpen(true)}>
@@ -1033,6 +1087,37 @@ const DashboardPage = () => {
                       )}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              {/* PRO: OwnCloud Sync */}
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <div className="flex items-center gap-2 mb-4">
+                  <Cloud className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Sincronização em Nuvem (ownCloud) ☁️</h3>
+                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Configure seu servidor ownCloud para sincronizar automaticamente arquivos aprovados via WebDAV.
+                </p>
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label>URL do Servidor ownCloud</Label>
+                    <Input placeholder="https://cloud.seudominio.com.br" value={owncloudUrl} onChange={(e) => isPro ? setOwncloudUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Usuário</Label>
+                    <Input placeholder="admin" value={owncloudUser} onChange={(e) => isPro ? setOwncloudUser(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Senha / Token de Aplicativo</Label>
+                    <Input type="password" placeholder="Token de aplicativo..." value={owncloudToken} onChange={(e) => isPro ? setOwncloudToken(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                  </div>
+                  {isPro && owncloudUrl && (
+                    <p className="text-xs text-success flex items-center gap-1">
+                      <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1065,7 +1150,7 @@ const DashboardPage = () => {
             </div>
             <h2 className="text-xl font-bold text-foreground">Desbloqueie o Pro ✨</h2>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Solicitações ilimitadas, uploads de até 2GB, white-label, lembrete mágico, senha no link, logs de auditoria e muito mais.
+              Solicitações ilimitadas, uploads de até 2GB, white-label, lembrete mágico, senha no link, expiração, ownCloud sync, logs de auditoria e muito mais.
             </p>
             <div className="mt-2">
               <span className="text-3xl font-extrabold text-foreground">R$49</span>
@@ -1081,22 +1166,35 @@ const DashboardPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Cloud Sync Modal */}
+      {/* Cloud Sync Modal - now shows OwnCloud info */}
       <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
         <DialogContent className="max-w-sm rounded-3xl text-center">
           <div className="flex flex-col items-center gap-4 py-4">
             <div className="h-16 w-16 rounded-3xl bg-accent flex items-center justify-center">
               <Cloud className="h-8 w-8 text-accent-foreground" />
             </div>
-            <h2 className="text-xl font-bold text-foreground">Sincronizar Nuvem ☁️</h2>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Em breve! Sincronize automaticamente os arquivos aprovados direto para seu Google Drive ou OneDrive.
-            </p>
-            <Badge variant="outline" className="text-xs border-pro/40 text-pro">
-              <Crown className="mr-1 h-3 w-3" /> Exclusivo Pro · Em breve
-            </Badge>
+            <h2 className="text-xl font-bold text-foreground">ownCloud Sync ☁️</h2>
+            {owncloudUrl ? (
+              <>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Configurado! Arquivos aprovados são sincronizados automaticamente para <strong className="text-foreground">{owncloudUrl}</strong>
+                </p>
+                <Badge variant="outline" className="text-xs border-success/40 text-success">
+                  <Check className="mr-1 h-3 w-3" /> Ativo
+                </Badge>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Configure seu servidor ownCloud na aba Configurações para ativar a sincronização automática via WebDAV.
+                </p>
+                <Button variant="outline" className="rounded-xl" onClick={() => { setCloudSyncModalOpen(false); }}>
+                  Ir para Configurações
+                </Button>
+              </>
+            )}
             <button onClick={() => setCloudSyncModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors mt-2">
-              Entendi
+              Fechar
             </button>
           </div>
         </DialogContent>
