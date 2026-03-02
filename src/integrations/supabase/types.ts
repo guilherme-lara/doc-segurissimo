@@ -66,6 +66,9 @@ export type Database = {
           display_name: string
           id: string
           logo_url: string | null
+          owncloud_token: string | null
+          owncloud_url: string | null
+          owncloud_user: string | null
           phone: string | null
           primary_color: string | null
           slug: string
@@ -78,6 +81,9 @@ export type Database = {
           display_name: string
           id?: string
           logo_url?: string | null
+          owncloud_token?: string | null
+          owncloud_url?: string | null
+          owncloud_user?: string | null
           phone?: string | null
           primary_color?: string | null
           slug: string
@@ -90,6 +96,9 @@ export type Database = {
           display_name?: string
           id?: string
           logo_url?: string | null
+          owncloud_token?: string | null
+          owncloud_url?: string | null
+          owncloud_user?: string | null
           phone?: string | null
           primary_color?: string | null
           slug?: string
@@ -105,6 +114,7 @@ export type Database = {
           client_name: string
           company_id: string
           created_at: string
+          expires_at: string | null
           id: string
           status: string
           updated_at: string
@@ -115,6 +125,7 @@ export type Database = {
           client_name: string
           company_id: string
           created_at?: string
+          expires_at?: string | null
           id?: string
           status?: string
           updated_at?: string
@@ -125,6 +136,7 @@ export type Database = {
           client_name?: string
           company_id?: string
           created_at?: string
+          expires_at?: string | null
           id?: string
           status?: string
           updated_at?: string
@@ -145,27 +157,33 @@ export type Database = {
           id: string
           is_completed: boolean
           item_name: string
+          item_type: string
           request_id: string
           sort_order: number
           stage_name: string
+          text_answer: string | null
         }
         Insert: {
           created_at?: string
           id?: string
           is_completed?: boolean
           item_name: string
+          item_type?: string
           request_id: string
           sort_order?: number
           stage_name?: string
+          text_answer?: string | null
         }
         Update: {
           created_at?: string
           id?: string
           is_completed?: boolean
           item_name?: string
+          item_type?: string
           request_id?: string
           sort_order?: number
           stage_name?: string
+          text_answer?: string | null
         }
         Relationships: [
           {
