@@ -72,16 +72,34 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
   const handleApprove = async () => {
     if (!file) return;
     setUpdating(true);
+    console.log("[approve] Approving file:", file.id, file.file_name);
     const { error } = await supabase
       .from("uploads")
       .update({ status: "approved", rejection_reason: null } as any)
       .eq("id", file.id);
     setUpdating(false);
     if (error) {
+      console.error("[approve] Error:", error.message);
       toast.error("Erro ao aprovar");
       return;
     }
+    console.log("[approve] ✅ File approved, triggering ownCloud sync...");
     toast.success("Arquivo aprovado ✅");
+
+    // Trigger OwnCloud sync (PRO) — fire and forget
+    try {
+      const res = await supabase.functions.invoke("owncloud-sync", {
+        body: { uploadId: file.id },
+      });
+      if (res.error) {
+        console.warn("[owncloud-sync] Sync skipped or failed:", res.error);
+      } else {
+        console.log("[owncloud-sync] ✅ Sync response:", res.data);
+      }
+    } catch (syncErr) {
+      console.warn("[owncloud-sync] Edge function call failed (may not be configured):", syncErr);
+    }
+
     onStatusChange?.();
     onOpenChange(false);
   };
@@ -92,15 +110,18 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       return;
     }
     setUpdating(true);
+    console.log("[reject] Rejecting file:", file.id, "reason:", rejectionReason.trim());
     const { error } = await supabase
       .from("uploads")
       .update({ status: "rejected", rejection_reason: rejectionReason.trim() } as any)
       .eq("id", file.id);
     setUpdating(false);
     if (error) {
+      console.error("[reject] Error:", error.message);
       toast.error("Erro ao rejeitar");
       return;
     }
+    console.log("[reject] ❌ File rejected successfully");
     toast.success("Arquivo rejeitado ❌");
     setShowRejectForm(false);
     setRejectionReason("");

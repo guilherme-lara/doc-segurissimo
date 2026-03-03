@@ -1156,9 +1156,11 @@ const DashboardPage = () => {
               <span className="text-3xl font-extrabold text-foreground">R$49</span>
               <span className="text-muted-foreground">/mês</span>
             </div>
-            <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-              Fazer Upgrade Agora 🚀
-            </Button>
+            <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer" className="w-full">
+              <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
+                Fazer Upgrade Agora 🚀
+              </Button>
+            </a>
             <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Agora não
             </button>
