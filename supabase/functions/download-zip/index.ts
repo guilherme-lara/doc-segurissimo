@@ -1,20 +1,31 @@
-import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { zipSync, strToU8 } from "https://esm.sh/fflate@0.8.2";
+/**
+ * Download ZIP — Edge Function
+ * 
+ * Gera um arquivo .ZIP com todos os uploads aprovados de uma solicitação.
+ * Requer autenticação JWT e verifica ownership da company.
+ *
+ * NOTA para migração (jotatechinfo.com.br):
+ * - Substituir supabase.storage.download por acesso direto ao filesystem
+ * - A lógica de ZIP pode ser replicada em C# com System.IO.Compression
+ */
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
+      console.error("[download-zip] No auth header");
       return new Response(JSON.stringify({ error: "Não autorizado" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -31,11 +42,13 @@ serve(async (req) => {
     });
     const { data: { user }, error: userError } = await userClient.auth.getUser();
     if (userError || !user) {
+      console.error("[download-zip] Auth failed:", userError?.message);
       return new Response(JSON.stringify({ error: "Não autorizado" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    console.log("[download-zip] User:", user.id);
 
     const { requestId } = await req.json();
     if (!requestId) {
@@ -44,6 +57,7 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    console.log("[download-zip] Request:", requestId);
 
     // Verify the request belongs to user's company
     const { data: docRequest, error: reqError } = await supabase
@@ -53,6 +67,7 @@ serve(async (req) => {
       .single();
 
     if (reqError || !docRequest) {
+      console.error("[download-zip] Request not found:", reqError?.message);
       return new Response(JSON.stringify({ error: "Solicitação não encontrada" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -60,20 +75,35 @@ serve(async (req) => {
     }
 
     if ((docRequest as any).companies.user_id !== user.id) {
+      console.error("[download-zip] Access denied");
       return new Response(JSON.stringify({ error: "Acesso negado" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get approved uploads for this request
+    // Get approved uploads for this request via request_items
+    const { data: requestItems } = await supabase
+      .from("request_items")
+      .select("id")
+      .eq("request_id", requestId);
+
+    if (!requestItems || requestItems.length === 0) {
+      return new Response(JSON.stringify({ error: "Nenhum item encontrado" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const itemIds = requestItems.map((i: any) => i.id);
     const { data: uploads, error: uploadsError } = await supabase
       .from("uploads")
-      .select("file_name, file_path, request_item_id, request_items!inner(request_id)")
+      .select("file_name, file_path")
       .eq("status", "approved")
-      .eq("request_items.request_id", requestId);
+      .in("request_item_id", itemIds);
 
     if (uploadsError) {
+      console.error("[download-zip] Uploads query error:", uploadsError.message);
       return new Response(JSON.stringify({ error: "Erro ao buscar arquivos" }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -86,8 +116,10 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    console.log("[download-zip] Found", uploads.length, "approved files");
 
-    // Download each file and build zip
+    // Download each file and build ZIP using fflate
+    const { zipSync } = await import("https://esm.sh/fflate@0.8.2");
     const filesData: Record<string, Uint8Array> = {};
     const nameCount: Record<string, number> = {};
 
@@ -98,11 +130,10 @@ serve(async (req) => {
         .download(upload.file_path);
 
       if (dlError || !fileData) {
-        console.error(`Failed to download ${upload.file_path}:`, dlError);
+        console.error(`[download-zip] Failed to download ${upload.file_path}:`, dlError?.message);
         continue;
       }
 
-      // Handle duplicate names
       let fileName = upload.file_name;
       if (nameCount[fileName]) {
         nameCount[fileName]++;
@@ -125,9 +156,11 @@ serve(async (req) => {
       });
     }
 
+    console.log("[download-zip] Zipping", Object.keys(filesData).length, "files");
     const zipped = zipSync(filesData);
 
     const clientName = (docRequest as any).client_name?.replace(/[^a-zA-Z0-9À-ÿ\s-]/g, "").trim() || "documentos";
+    console.log("[download-zip] ✅ ZIP created for:", clientName);
 
     return new Response(zipped, {
       headers: {
@@ -137,7 +170,7 @@ serve(async (req) => {
       },
     });
   } catch (err) {
-    console.error("ZIP error:", err);
+    console.error("[download-zip] Error:", err);
     return new Response(JSON.stringify({ error: "Erro interno ao gerar ZIP" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
