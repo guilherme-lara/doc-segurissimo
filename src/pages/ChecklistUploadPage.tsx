@@ -335,6 +335,26 @@ const ChecklistUploadPage = () => {
     }
   };
 
+  // Link expiration + countdown (hooks must be before early returns)
+  const isExpired = request?.expires_at ? new Date(request.expires_at) < new Date() : false;
+  
+  const [countdown, setCountdown] = useState("");
+  useEffect(() => {
+    if (!request?.expires_at || isExpired) return;
+    const update = () => {
+      const diff = new Date(request.expires_at!).getTime() - Date.now();
+      if (diff <= 0) { setCountdown("Expirado"); return; }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setCountdown(`${d > 0 ? d + "d " : ""}${h}h ${m}m ${s}s`);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [request?.expires_at, isExpired]);
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
@@ -373,8 +393,6 @@ const ChecklistUploadPage = () => {
     );
   }
 
-  // Link expiration check
-  const isExpired = request.expires_at && new Date(request.expires_at) < new Date();
   if (isExpired) {
     console.log("[checklist] Link expired:", request.expires_at);
     return (
@@ -533,6 +551,15 @@ const ChecklistUploadPage = () => {
             )}
           </div>
         </motion.div>
+
+        {/* Countdown timer for expiring links */}
+        {request?.expires_at && !isExpired && countdown && (
+          <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-pro/30 bg-pro/5 px-4 py-2.5 text-sm">
+            <Clock className="h-4 w-4 text-pro" />
+            <span className="text-muted-foreground">Expira em:</span>
+            <span className="font-mono font-semibold text-pro">{countdown}</span>
+          </div>
+        )}
 
         {/* Progress bar */}
         {totalCount > 0 && (
