@@ -180,14 +180,19 @@ Deno.serve(async (req) => {
     // 9. Upload file via PUT
     const putUrl = `${baseUrl}${filePath}`;
     console.log("[owncloud-sync] Uploading to:", putUrl);
+    console.log("[owncloud-sync] File size:", fileData.size, "Content-Type:", upload.content_type);
+
+    const arrayBuffer = await fileData.arrayBuffer();
+    console.log("[owncloud-sync] ArrayBuffer size:", arrayBuffer.byteLength);
 
     const putResponse = await fetch(putUrl, {
       method: "PUT",
       headers: {
         ...headers,
         "Content-Type": upload.content_type ?? "application/octet-stream",
+        "Content-Length": String(arrayBuffer.byteLength),
       },
-      body: fileData,
+      body: arrayBuffer,
     });
 
     const putStatus = putResponse.status;
@@ -200,8 +205,13 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     } else {
-      console.error("[owncloud-sync] ❌ WebDAV PUT failed:", putStatus, putBody);
-      return new Response(JSON.stringify({ error: `WebDAV error: ${putStatus}`, details: putBody.slice(0, 500) }), {
+      const errorMsg = putStatus === 401 || putStatus === 403
+        ? "Credenciais ownCloud inválidas ou sem permissão"
+        : putStatus === 404
+          ? "Caminho WebDAV não encontrado no servidor ownCloud"
+          : `Erro WebDAV (HTTP ${putStatus})`;
+      console.error("[owncloud-sync] ❌ WebDAV PUT failed:", putStatus, errorMsg, putBody);
+      return new Response(JSON.stringify({ error: errorMsg, status: putStatus, details: putBody.slice(0, 500) }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

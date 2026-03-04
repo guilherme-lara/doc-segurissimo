@@ -448,19 +448,46 @@ const DashboardPage = () => {
       }
 
       console.log("[download-zip] Starting for request:", requestId);
-      const res = await supabase.functions.invoke("download-zip", {
-        body: { requestId },
+      toast.info("Gerando ZIP... aguarde ⏳");
+
+      // Use raw fetch to preserve binary data — supabase.functions.invoke
+      // parses as JSON by default, corrupting the ZIP bytes
+      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const functionUrl = `https://${projectId}.supabase.co/functions/v1/download-zip`;
+      console.log("[download-zip] Calling:", functionUrl);
+
+      const response = await fetch(functionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ requestId }),
       });
 
-      if (res.error) {
-        const errorMsg = typeof res.error === "object" && "message" in res.error
-          ? (res.error as any).message
-          : "Erro ao gerar ZIP";
+      console.log("[download-zip] Response status:", response.status, response.headers.get("content-type"));
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error("[download-zip] Error body:", errorBody);
+        let errorMsg = "Erro ao gerar ZIP";
+        try {
+          const parsed = JSON.parse(errorBody);
+          errorMsg = parsed.error || errorMsg;
+        } catch { /* not JSON */ }
         toast.error(errorMsg);
         return;
       }
 
-      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: "application/zip" });
+      const blob = await response.blob();
+      console.log("[download-zip] ✅ Blob received, size:", blob.size, "type:", blob.type);
+
+      if (blob.size === 0) {
+        toast.error("ZIP vazio — nenhum arquivo aprovado encontrado");
+        return;
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -469,8 +496,9 @@ const DashboardPage = () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast.success("Download iniciado! 📦");
+      toast.success("Download concluído! 📦");
     } catch (err: any) {
+      console.error("[download-zip] Exception:", err);
       toast.error("Erro ao baixar ZIP", { description: err.message });
     } finally {
       setDownloadingZipId(null);

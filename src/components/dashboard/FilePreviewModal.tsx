@@ -88,16 +88,36 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
 
     // Trigger OwnCloud sync (PRO) — fire and forget
     try {
+      console.log("[owncloud-sync] Invoking edge function for upload:", file.id);
       const res = await supabase.functions.invoke("owncloud-sync", {
         body: { uploadId: file.id },
       });
       if (res.error) {
-        console.warn("[owncloud-sync] Sync skipped or failed:", res.error);
+        const errorDetail = typeof res.error === "object" && "message" in res.error
+          ? (res.error as any).message
+          : JSON.stringify(res.error);
+        console.error("[owncloud-sync] ❌ Sync failed:", errorDetail);
+        // Only show error if ownCloud is configured (code !== NOT_CONFIGURED)
+        if (res.data?.code !== "NOT_CONFIGURED") {
+          toast.error("Erro ao sincronizar com ownCloud. Verifique credenciais ou regras de CORS.", {
+            description: errorDetail,
+            duration: 8000,
+          });
+        } else {
+          console.log("[owncloud-sync] ownCloud não configurado — ignorando sync");
+        }
       } else {
         console.log("[owncloud-sync] ✅ Sync response:", res.data);
+        if (res.data?.success) {
+          toast.success("Arquivo sincronizado com ownCloud ☁️", { duration: 5000 });
+        }
       }
-    } catch (syncErr) {
-      console.warn("[owncloud-sync] Edge function call failed (may not be configured):", syncErr);
+    } catch (syncErr: any) {
+      console.error("[owncloud-sync] Edge function exception:", syncErr);
+      toast.error("Erro ao sincronizar com ownCloud. Verifique credenciais ou regras de CORS.", {
+        description: syncErr?.message || String(syncErr),
+        duration: 8000,
+      });
     }
 
     onStatusChange?.();
