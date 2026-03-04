@@ -246,6 +246,40 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
+  // Realtime: listen for uploads changes to update dashboard instantly
+  useEffect(() => {
+    if (!company?.id) return;
+
+    console.log("[dashboard-realtime] Subscribing to uploads & request_items for company:", company.id);
+
+    const channel = supabase
+      .channel(`dashboard-${company.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` },
+        (payload) => {
+          console.log("[dashboard-realtime] uploads change:", payload.eventType, (payload.new as any)?.status);
+          queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "request_items" },
+        () => {
+          console.log("[dashboard-realtime] request_items change detected");
+          queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
+        }
+      )
+      .subscribe((status) => {
+        console.log("[dashboard-realtime] Subscription status:", status);
+      });
+
+    return () => {
+      console.log("[dashboard-realtime] Unsubscribing");
+      supabase.removeChannel(channel);
+    };
+  }, [company?.id, queryClient]);
+
   // Settings state
   const [displayName, setDisplayName] = useState("");
   const [slugValue, setSlugValue] = useState("");
@@ -1164,8 +1198,9 @@ const DashboardPage = () => {
         onOpenChange={setPreviewOpen}
         file={previewFile}
         onStatusChange={() => {
-          queryClient.invalidateQueries({ queryKey: ["uploads"] });
-          queryClient.invalidateQueries({ queryKey: ["requests"] });
+          console.log("[dashboard] onStatusChange → invalidating uploads + requests");
+          queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
+          queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
         }}
       />
 
