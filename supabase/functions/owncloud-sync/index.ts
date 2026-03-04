@@ -152,13 +152,37 @@ Deno.serve(async (req) => {
     // Client name from nested relation
     const clientName = (upload as any).request_items?.document_requests?.client_name ?? "sem-nome";
     const sanitizedClient = clientName.replace(/[^a-zA-Z0-9À-ú\s\-_]/g, "").trim();
-    const baseUrl = company.owncloud_url.replace(/\/+$/, "");
+
+    const rawOwncloudUrl = (company.owncloud_url ?? "").trim();
+    const normalizedBase = /^https?:\/\//i.test(rawOwncloudUrl)
+      ? rawOwncloudUrl
+      : `https://${rawOwncloudUrl}`;
+    let baseUrl: string;
+
+    try {
+      baseUrl = new URL(normalizedBase).toString().replace(/\/+$/, "");
+    } catch (urlErr) {
+      console.error("[owncloud-sync] Invalid ownCloud URL:", rawOwncloudUrl, "normalized:", normalizedBase, "error:", urlErr);
+      return new Response(JSON.stringify({ error: "URL do ownCloud inválida. Use domínio com protocolo (https://).", code: "INVALID_OWNCLOUD_URL" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const davBasePath = `/remote.php/dav/files/${company.owncloud_user}`;
     const folderPath = `${davBasePath}/Seguríssimo/${sanitizedClient}`;
     const filePath = `${folderPath}/${upload.file_name}`;
 
     const authBasic = btoa(`${company.owncloud_user}:${company.owncloud_token}`);
     const headers = { Authorization: `Basic ${authBasic}` };
+
+    console.log("[owncloud-sync] URL normalize:", {
+      rawOwncloudUrl,
+      normalizedBase,
+      baseUrl,
+      folderPath,
+      filePath,
+    });
 
     // 8. Create folder structure via MKCOL (ignore 405 = already exists)
     console.log("[owncloud-sync] Creating folder:", `${baseUrl}${davBasePath}/Seguríssimo`);
