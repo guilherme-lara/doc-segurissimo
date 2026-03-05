@@ -438,15 +438,33 @@ const DashboardPage = () => {
       return;
     }
 
-    const allItems = req.request_items ?? [];
-    const requestUploads = uploads?.filter((u: any) =>
+    const allItems = (req.request_items ?? []) as any[];
+    const requestUploads = (uploads ?? []).filter((u: any) =>
       allItems.some((item: any) => item.id === u.request_item_id)
-    ) ?? [];
+    );
 
+    // Only include items that are truly pending:
+    // - No upload at all (client hasn't sent anything)
+    // - Upload was rejected (client needs to re-send)
+    // Exclude items with upload status "pending" (already uploaded, awaiting review)
+    // and "approved" (fully done)
     const pendingItems = allItems.filter((item: any) => {
-      const upload = requestUploads.find((u: any) => u.request_item_id === item.id);
-      if (!upload) return true;
-      return upload.status === "pending" || upload.status === "rejected";
+      // Skip text-type items that are already completed
+      if (item.item_type === "text" && item.is_completed) return false;
+      
+      const itemUploads = requestUploads.filter((u: any) => u.request_item_id === item.id);
+      
+      // No upload at all → needs to send
+      if (itemUploads.length === 0 && item.item_type !== "text") return true;
+      // Text item not completed → needs to answer
+      if (item.item_type === "text" && !item.is_completed) return true;
+      
+      // Check latest upload status
+      const latestUpload = itemUploads.sort((a: any, b: any) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+      
+      return latestUpload?.status === "rejected";
     });
 
     if (pendingItems.length === 0) {
@@ -454,16 +472,45 @@ const DashboardPage = () => {
       return;
     }
 
-    const docList = pendingItems.map((item: any) => `• ${item.item_name}`).join("\n");
+    const rejectedItems = pendingItems.filter((item: any) => {
+      const latestUpload = requestUploads
+        .filter((u: any) => u.request_item_id === item.id)
+        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      return latestUpload?.status === "rejected";
+    });
+
+    const notSentItems = pendingItems.filter((item: any) => !rejectedItems.includes(item));
+
+    let docList = "";
+    if (notSentItems.length > 0) {
+      docList += notSentItems.map((item: any) => `📎 ${item.item_name}`).join("\n");
+    }
+    if (rejectedItems.length > 0) {
+      if (docList) docList += "\n\n";
+      docList += "⚠️ *Documentos que precisam ser reenviados:*\n";
+      docList += rejectedItems.map((item: any) => {
+        const latestUpload = requestUploads
+          .filter((u: any) => u.request_item_id === item.id)
+          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        const reason = latestUpload?.rejection_reason ? ` (Motivo: ${latestUpload.rejection_reason})` : "";
+        return `🔄 ${item.item_name}${reason}`;
+      }).join("\n");
+    }
+
     const link = `${window.location.origin}/${slug}/enviar/${req.id}`;
-    const message = `Olá! 👋 Passando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\nAcesse seu link seguro para enviar: ${link}`;
+    const message = `Olá, ${req.client_name}! 👋\n\nPassando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\n📲 Acesse seu link seguro para enviar:\n${link}\n\nQualquer dúvida, estou à disposição!`;
     const encoded = encodeURIComponent(message);
 
-    const clientPhone = req.client_email?.replace(/\D/g, "") ?? "";
-    const waUrl = clientPhone
-      ? `https://wa.me/${clientPhone}?text=${encoded}`
+    // Try to extract phone from client_email field
+    const rawContact = (req.client_email ?? "").trim();
+    const digitsOnly = rawContact.replace(/\D/g, "");
+    // If it looks like a phone number (10+ digits), use it
+    const isPhone = digitsOnly.length >= 10 && !rawContact.includes("@");
+    const waUrl = isPhone
+      ? `https://wa.me/${digitsOnly}?text=${encoded}`
       : `https://wa.me/?text=${encoded}`;
 
+    console.log("[magic-reminder] Opening WhatsApp:", { client: req.client_name, pendingCount: pendingItems.length, rejectedCount: rejectedItems.length, isPhone, waUrl });
     window.open(waUrl, "_blank");
   };
 
