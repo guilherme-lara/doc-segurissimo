@@ -570,7 +570,15 @@ const ChecklistUploadPage = () => {
                 {completedCount} de {totalCount} ✅
               </span>
             </div>
-            <Progress value={(completedCount / totalCount) * 100} className="h-2 rounded-full" />
+            <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${!brandColor ? 'gradient-primary' : ''}`}
+                style={{
+                  width: `${(completedCount / totalCount) * 100}%`,
+                  ...(brandColor ? { backgroundColor: brandColor } : {}),
+                }}
+              />
+            </div>
           </div>
         )}
 
@@ -671,10 +679,10 @@ const ChecklistUploadPage = () => {
                       {canUpload && !staged && !isUploading && (
                         <label className="cursor-pointer shrink-0">
                           <span
-                            className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200"
+                            className="relative inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
                             style={brandColor ? { background: brandColor } : undefined}
                           >
-                            {!brandColor && <span className="absolute inset-0 rounded-xl gradient-primary" />}
+                            {!brandColor && <span className="absolute inset-0 rounded-xl gradient-primary -z-0" />}
                             <Upload className="h-3 w-3 relative z-10" />
                             <span className="relative z-10">{isRejected ? "Reenviar" : "Enviar"}</span>
                           </span>

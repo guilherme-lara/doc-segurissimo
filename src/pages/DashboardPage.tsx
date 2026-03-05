@@ -29,7 +29,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,7 @@ const DashboardPage = () => {
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [phone, setPhone] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
 
   // OwnCloud config
   const [owncloudUrl, setOwncloudUrl] = useState("");
@@ -1172,8 +1173,54 @@ const DashboardPage = () => {
                 </div>
                 <div className="space-y-4 max-w-md">
                   <div className="space-y-2">
-                    <Label>Logo URL</Label>
-                    <Input placeholder="https://minha-empresa.com/logo.png" value={logoUrl} onChange={(e) => isPro ? setLogoUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    <Label>Logo da Empresa</Label>
+                    <div className="flex items-center gap-4">
+                      {logoUrl && (
+                        <img src={logoUrl} alt="Logo" className="h-12 w-12 rounded-2xl object-cover border border-border shadow-card" />
+                      )}
+                      <label className={`cursor-pointer inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent ${!isPro ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {logoUploading ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" /> Enviando...</>
+                        ) : (
+                          <><Upload className="h-4 w-4" /> {logoUrl ? "Trocar logo" : "Enviar logo"}</>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={!isPro || logoUploading}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file || !company) return;
+                            if (!isPro) { setUpgradeModalOpen(true); return; }
+                            setLogoUploading(true);
+                            try {
+                              const ext = file.name.split('.').pop();
+                              const filePath = `${company.id}/logo.${ext}`;
+                              const { error: uploadError } = await supabase.storage
+                                .from("logos")
+                                .upload(filePath, file, { upsert: true });
+                              if (uploadError) throw uploadError;
+                              const { data: urlData } = supabase.storage.from("logos").getPublicUrl(filePath);
+                              const publicUrl = urlData.publicUrl + "?t=" + Date.now();
+                              setLogoUrl(publicUrl);
+                              toast.success("Logo enviada! Salve as configurações para aplicar ✅");
+                            } catch (err: any) {
+                              console.error("[logo-upload]", err);
+                              toast.error("Erro ao enviar logo", { description: err.message });
+                            } finally {
+                              setLogoUploading(false);
+                              e.target.value = "";
+                            }
+                          }}
+                        />
+                      </label>
+                      {logoUrl && isPro && (
+                        <Button variant="ghost" size="sm" className="text-destructive rounded-xl" onClick={() => setLogoUrl("")}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> CNPJ</Label>
