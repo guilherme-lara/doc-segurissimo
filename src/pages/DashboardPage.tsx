@@ -858,6 +858,44 @@ const DashboardPage = () => {
           </div>
         </motion.div>
 
+        {/* ─── Stats Overview Cards ─── */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"
+        >
+          {(() => {
+            const totalRequests = requests?.length ?? 0;
+            const totalUploads = uploads?.length ?? 0;
+            const approvedUploads = uploads?.filter((u: any) => u.status === "approved").length ?? 0;
+            const pendingUploads = uploads?.filter((u: any) => u.status === "pending").length ?? 0;
+            const rejectedUploads = uploads?.filter((u: any) => u.status === "rejected").length ?? 0;
+            const completionRate = totalUploads > 0 ? Math.round((approvedUploads / totalUploads) * 100) : 0;
+
+            const stats = [
+              { label: "Solicitações", value: totalRequests, icon: LinkIcon, color: "text-primary", bg: "bg-primary/10" },
+              { label: "Pendentes", value: pendingUploads, icon: Clock, color: "text-amber-500", bg: "bg-amber-500/10" },
+              { label: "Aprovados", value: approvedUploads, icon: Check, color: "text-success", bg: "bg-success/10" },
+              { label: "Taxa de Aprovação", value: `${completionRate}%`, icon: Sparkles, color: "text-pro", bg: "bg-pro/10" },
+            ];
+
+            return stats.map((stat, i) => (
+              <div key={i} className="rounded-2xl border border-border/60 bg-card p-4 shadow-card hover:shadow-elevated transition-all duration-300">
+                <div className="flex items-center gap-3">
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${stat.bg}`}>
+                    <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-foreground">{stat.value}</p>
+                    <p className="text-[11px] text-muted-foreground">{stat.label}</p>
+                  </div>
+                </div>
+              </div>
+            ));
+          })()}
+        </motion.div>
+
         <Tabs defaultValue="requests" className="w-full">
           <TabsList className="mb-6 rounded-2xl">
             <TabsTrigger value="requests" className="rounded-xl">
@@ -896,14 +934,35 @@ const DashboardPage = () => {
             {requestsLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-28 w-full rounded-2xl" />
+                  <div key={i} className="rounded-2xl border border-border/60 bg-card p-5 shadow-card space-y-3 animate-pulse">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-2">
+                        <Skeleton className="h-5 w-32 rounded-lg" />
+                        <Skeleton className="h-3 w-20 rounded-lg" />
+                      </div>
+                      <Skeleton className="h-6 w-16 rounded-full" />
+                    </div>
+                    <div className="flex gap-2">
+                      <Skeleton className="h-6 w-20 rounded-full" />
+                      <Skeleton className="h-6 w-24 rounded-full" />
+                      <Skeleton className="h-6 w-16 rounded-full" />
+                    </div>
+                    <div className="flex gap-2">
+                      <Skeleton className="h-8 w-24 rounded-xl" />
+                      <Skeleton className="h-8 w-20 rounded-xl" />
+                    </div>
+                  </div>
                 ))}
               </div>
             ) : requests?.length === 0 ? (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-16 text-muted-foreground">
-                <FileText className="mx-auto h-12 w-12 mb-4 text-border" />
-                <p className="text-lg font-medium">Nenhum documento pendente por aqui! 🎉</p>
-                <p className="text-sm mt-1">Que paz, hein? Clique em "Criar Solicitação" para começar.</p>
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
+                <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/10">
+                  <FileText className="h-10 w-10 text-primary/40" />
+                </div>
+                <p className="text-xl font-bold text-foreground mb-2">Tudo limpo por aqui! 🎉</p>
+                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                  Nenhuma solicitação criada ainda. Clique em <strong>"Criar Solicitação"</strong> para enviar seu primeiro link.
+                </p>
               </motion.div>
             ) : viewMode === "kanban" ? (
               <KanbanView
@@ -1064,10 +1123,15 @@ const DashboardPage = () => {
                 ))}
               </div>
             ) : filteredUploads.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <FileText className="mx-auto h-10 w-10 mb-3 text-border" />
-                <p className="text-sm">Nenhum arquivo encontrado 📭</p>
-              </div>
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
+                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-accent to-accent/50 border border-border/40">
+                  <Download className="h-8 w-8 text-muted-foreground/40" />
+                </div>
+                <p className="text-lg font-bold text-foreground mb-1">Nenhum arquivo por aqui 📭</p>
+                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
+                  Quando seus clientes enviarem documentos, eles aparecerão aqui para revisão.
+                </p>
+              </motion.div>
             ) : Object.keys(uploadsByStage).length > 1 ? (
               <Accordion type="multiple" defaultValue={Object.keys(uploadsByStage)} className="space-y-2">
                 {Object.entries(uploadsByStage).map(([stage, files]) => (
