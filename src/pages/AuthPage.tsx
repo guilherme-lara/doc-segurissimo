@@ -17,11 +17,12 @@ const AuthPage = () => {
   const [signupEmail, setSignupEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupConfirm, setSignupConfirm] = useState("");
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
 
   const redirectToDashboard = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      // Check if admin
       const { data: adminRole } = await supabase
         .from("user_roles")
         .select("role")
@@ -81,6 +82,31 @@ const AuthPage = () => {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) {
+      toast.error("Informe seu e-mail");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+        redirectTo: `${window.location.origin}/auth/login`,
+      });
+      if (error) throw error;
+      toast.success("E-mail de recuperação enviado! 📧", {
+        description: "Verifique sua caixa de entrada e spam.",
+        duration: 6000,
+      });
+      setShowForgotPassword(false);
+      setForgotEmail("");
+    } catch (error: any) {
+      toast.error("Erro ao enviar e-mail", { description: error.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 relative">
       <div className="absolute inset-0 gradient-hero" />
@@ -127,7 +153,41 @@ const AuthPage = () => {
                 <Button type="submit" className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300" size="lg" disabled={isLoading}>
                   {isLoading ? "Entrando..." : <> Entrar <ArrowRight className="ml-2 h-4 w-4" /></>}
                 </Button>
+                <button
+                  type="button"
+                  onClick={() => { setShowForgotPassword(true); setForgotEmail(loginEmail); }}
+                  className="w-full text-xs text-muted-foreground hover:text-primary transition-colors mt-2"
+                >
+                  Esqueceu sua senha? 🔑
+                </button>
               </form>
+
+              {showForgotPassword && (
+                <motion.form
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  onSubmit={handleForgotPassword}
+                  className="mt-4 space-y-3 border-t border-border/40 pt-4"
+                >
+                  <p className="text-xs text-muted-foreground">Digite seu e-mail para receber o link de recuperação:</p>
+                  <Input
+                    type="email"
+                    placeholder="seu@email.com"
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="rounded-xl"
+                    required
+                  />
+                  <div className="flex gap-2">
+                    <Button type="submit" className="flex-1 rounded-xl" size="sm" disabled={isLoading}>
+                      {isLoading ? "Enviando..." : "Enviar link 📧"}
+                    </Button>
+                    <Button type="button" variant="outline" className="rounded-xl" size="sm" onClick={() => setShowForgotPassword(false)}>
+                      Cancelar
+                    </Button>
+                  </div>
+                </motion.form>
+              )}
             </TabsContent>
 
             <TabsContent value="signup">
