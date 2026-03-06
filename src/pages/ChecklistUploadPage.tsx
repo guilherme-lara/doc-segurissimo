@@ -32,7 +32,7 @@
  */
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Type } from "lucide-react";
+import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Type, Loader2 } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
@@ -44,6 +44,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
+import { validateAndProcessFile } from "@/lib/file-security";
 
 interface RequestItem {
   id: string;
@@ -239,13 +240,34 @@ const ChecklistUploadPage = () => {
     return acc;
   }, {}) ?? {};
 
-  const stageFile = (itemId: string, file: File) => {
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
+
+  const stageFile = async (itemId: string, file: File) => {
     const maxMb = plan?.max_file_size_mb ?? 50;
     if (file.size > maxMb * 1024 * 1024) {
       toast.error(`Arquivo muito grande`, { description: `Limite de ${maxMb}MB por arquivo.` });
       return;
     }
-    setStagedFiles((prev) => ({ ...prev, [itemId]: file }));
+
+    // Zero Trust: validação + compressão
+    setProcessingItemId(itemId);
+    try {
+      const result = await validateAndProcessFile(file);
+      if (!result.valid) {
+        toast.error("Arquivo bloqueado 🚫", { description: result.error, duration: 6000 });
+        return;
+      }
+      const processed = result.processedFile!;
+      if (processed.size < file.size) {
+        const saved = ((1 - processed.size / file.size) * 100).toFixed(0);
+        toast.success(`Imagem otimizada! 📸`, { description: `Redução de ${saved}% no tamanho.` });
+      }
+      setStagedFiles((prev) => ({ ...prev, [itemId]: processed }));
+    } catch (err) {
+      toast.error("Erro ao processar arquivo");
+    } finally {
+      setProcessingItemId(null);
+    }
   };
 
   const removeStagedFile = (itemId: string) => {
@@ -676,7 +698,7 @@ const ChecklistUploadPage = () => {
                         <span className="text-xs text-success shrink-0">✅ Respondido</span>
                       )}
 
-                      {canUpload && !staged && !isUploading && (
+                      {canUpload && !staged && !isUploading && processingItemId !== item.id && (
                         <label className="cursor-pointer shrink-0">
                           <span
                             className="relative inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
@@ -689,6 +711,7 @@ const ChecklistUploadPage = () => {
                           <input
                             type="file"
                             className="hidden"
+                            accept=".jpg,.jpeg,.png,.webp,.pdf"
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) stageFile(item.id, file);
@@ -696,6 +719,11 @@ const ChecklistUploadPage = () => {
                             }}
                           />
                         </label>
+                      )}
+                      {processingItemId === item.id && (
+                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Processando...
+                        </span>
                       )}
                     </div>
 
