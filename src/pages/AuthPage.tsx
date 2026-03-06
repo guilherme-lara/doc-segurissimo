@@ -187,7 +187,7 @@ const AuthPage = () => {
                     </Button>
                   </div>
                 </motion.form>
-              )
+              )}
             </TabsContent>
 
             <TabsContent value="signup">
