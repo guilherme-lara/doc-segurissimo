@@ -13,6 +13,10 @@ import DashboardPage from "./pages/DashboardPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import NotFound from "./pages/NotFound";
 
+// Imports das Páginas Legais LGPD
+import TermosUso from "./pages/TermosUso";
+import Politica from "./pages/Politica";
+
 const queryClient = new QueryClient();
 
 /**
@@ -21,6 +25,8 @@ const queryClient = new QueryClient();
  * /                                → Landing page (conversão B2B)
  * /auth/login                      → Login / Signup
  * /admin/dashboard                 → Painel Admin (role: admin)
+ * /termos                          → Termos de Uso (LGPD)
+ * /privacidade                     → Política de Privacidade (LGPD)
  * /:slug/enviar/:requestId         → Upload com checklist (link único)
  * /:slug/dashboard                 → Dashboard autenticado
  *
@@ -46,6 +52,11 @@ const App = () => (
                   <DashboardPage />
                 </ErrorBoundary>
               } />
+              
+              {/* Rotas Legais Adicionadas */}
+              <Route path="/termos" element={<TermosUso />} />
+              <Route path="/privacidade" element={<Politica />} />
+
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
