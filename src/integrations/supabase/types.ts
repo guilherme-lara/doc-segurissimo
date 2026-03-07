@@ -204,6 +204,7 @@ export type Database = {
           file_path: string
           file_size: number
           id: string
+          lgpd_consent: boolean
           rejection_reason: string | null
           request_item_id: string
           sender_name: string | null
@@ -217,6 +218,7 @@ export type Database = {
           file_path: string
           file_size: number
           id?: string
+          lgpd_consent?: boolean
           rejection_reason?: string | null
           request_item_id: string
           sender_name?: string | null
@@ -230,6 +232,7 @@ export type Database = {
           file_path?: string
           file_size?: number
           id?: string
+          lgpd_consent?: boolean
           rejection_reason?: string | null
           request_item_id?: string
           sender_name?: string | null
