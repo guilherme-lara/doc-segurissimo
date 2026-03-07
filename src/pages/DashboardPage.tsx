@@ -15,6 +15,7 @@
  * - Link com expiração (PRO)
  * - Campos de texto no checklist
  * - Branding: Logo URL, CNPJ, Telefone, Cor (PRO)
+ * - Excluir/Engavetar solicitações
  *
  * NOTA para migração:
  * - Signed URLs via supabase.storage.createSignedUrl (substituir por endpoint próprio)
@@ -29,7 +30,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -107,8 +108,13 @@ const DashboardPage = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
 
-  // View mode
+  // View mode & Filters
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Manage Request Dialog (Archive/Delete)
+  const [manageRequestOpen, setManageRequestOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<{id: string, clientName: string} | null>(null);
 
   // New request dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -226,6 +232,11 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
+  // Visibilidade de engavetados
+  const visibleRequests = requests?.filter((r: any) => 
+    showArchived ? r.status === "archived" : r.status !== "archived"
+  ) ?? [];
+
   // Fetch uploads
   const { data: uploads, isLoading: uploadsLoading } = useQuery({
     queryKey: ["uploads", company?.id],
@@ -252,15 +263,12 @@ const DashboardPage = () => {
   useEffect(() => {
     if (!company?.id) return;
 
-    console.log("[dashboard-realtime] Subscribing to uploads & request_items for company:", company.id);
-
     const channel = supabase
       .channel(`dashboard-${company.id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` },
-        (payload) => {
-          console.log("[dashboard-realtime] uploads change:", payload.eventType, (payload.new as any)?.status);
+        () => {
           queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
         }
       )
@@ -268,16 +276,12 @@ const DashboardPage = () => {
         "postgres_changes",
         { event: "*", schema: "public", table: "request_items" },
         () => {
-          console.log("[dashboard-realtime] request_items change detected");
           queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
         }
       )
-      .subscribe((status) => {
-        console.log("[dashboard-realtime] Subscription status:", status);
-      });
+      .subscribe();
 
     return () => {
-      console.log("[dashboard-realtime] Unsubscribing");
       supabase.removeChannel(channel);
     };
   }, [company?.id, queryClient]);
@@ -325,7 +329,7 @@ const DashboardPage = () => {
     setCustomItemName("");
   };
 
-  const activeRequestCount = requests?.filter((r: any) => r.status !== "completed").length ?? 0;
+  const activeRequestCount = requests?.filter((r: any) => r.status !== "completed" && r.status !== "archived").length ?? 0;
   const maxRequests = plan?.max_active_requests ?? 5;
 
   // Create request mutation
@@ -347,15 +351,12 @@ const DashboardPage = () => {
         insertData.access_password = accessPassword.trim();
       }
 
-      // Link expiration (PRO)
       if (isPro && linkExpiration && expirationDays > 0) {
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + expirationDays);
         insertData.expires_at = expiresAt.toISOString();
-        console.log("[create-request] Link expires at:", insertData.expires_at);
       }
 
-      console.log("[create-request] Creating request:", insertData);
       const { data: req, error: reqError } = await supabase
         .from("document_requests")
         .insert(insertData)
@@ -370,7 +371,6 @@ const DashboardPage = () => {
         sort_order: i,
         item_type: item.itemType,
       }));
-      console.log("[create-request] Creating items:", items);
       const { error: itemsError } = await supabase.from("request_items").insert(items);
       if (itemsError) throw itemsError;
       return req;
@@ -393,7 +393,35 @@ const DashboardPage = () => {
     },
   });
 
-  // Update settings (includes OwnCloud config)
+  // Archive mutation
+  const archiveRequest = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("document_requests").update({ status: "archived" }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["requests"] });
+      setManageRequestOpen(false);
+      toast.success("Solicitação engavetada! 📦");
+    },
+    onError: (err: any) => toast.error("Erro ao engavetar", { description: err.message })
+  });
+
+  // Delete mutation
+  const deleteRequest = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("document_requests").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["requests"] });
+      setManageRequestOpen(false);
+      toast.success("Solicitação excluída permanentemente! 🗑️");
+    },
+    onError: (err: any) => toast.error("Erro ao excluir", { description: err.message })
+  });
+
+  // Update settings
   const updateSettings = useMutation({
     mutationFn: async () => {
       if (!company) return;
@@ -405,13 +433,11 @@ const DashboardPage = () => {
         cnpj: cnpj || null,
         phone: phone || null,
       };
-      // OwnCloud config (PRO only)
       if (isPro) {
         updateData.owncloud_url = owncloudUrl || null;
         updateData.owncloud_user = owncloudUser || null;
         updateData.owncloud_token = owncloudToken || null;
       }
-      console.log("[settings] Saving:", updateData);
       const { error } = await supabase
         .from("companies")
         .update(updateData)
@@ -433,7 +459,6 @@ const DashboardPage = () => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // WhatsApp Magic Reminder
   const handleMagicReminder = (req: any) => {
     if (!isPro) {
       setUpgradeModalOpen(true);
@@ -445,27 +470,15 @@ const DashboardPage = () => {
       allItems.some((item: any) => item.id === u.request_item_id)
     );
 
-    // Only include items that are truly pending:
-    // - No upload at all (client hasn't sent anything)
-    // - Upload was rejected (client needs to re-send)
-    // Exclude items with upload status "pending" (already uploaded, awaiting review)
-    // and "approved" (fully done)
     const pendingItems = allItems.filter((item: any) => {
-      // Skip text-type items that are already completed
       if (item.item_type === "text" && item.is_completed) return false;
-      
       const itemUploads = requestUploads.filter((u: any) => u.request_item_id === item.id);
-      
-      // No upload at all → needs to send
       if (itemUploads.length === 0 && item.item_type !== "text") return true;
-      // Text item not completed → needs to answer
       if (item.item_type === "text" && !item.is_completed) return true;
       
-      // Check latest upload status
       const latestUpload = itemUploads.sort((a: any, b: any) => 
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       )[0];
-      
       return latestUpload?.status === "rejected";
     });
 
@@ -503,16 +516,13 @@ const DashboardPage = () => {
     const message = `Olá, ${req.client_name}! 👋\n\nPassando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\n📲 Acesse seu link seguro para enviar:\n${link}\n\nQualquer dúvida, estou à disposição!`;
     const encoded = encodeURIComponent(message);
 
-    // Try to extract phone from client_email field
     const rawContact = (req.client_email ?? "").trim();
     const digitsOnly = rawContact.replace(/\D/g, "");
-    // If it looks like a phone number (10+ digits), use it
     const isPhone = digitsOnly.length >= 10 && !rawContact.includes("@");
     const waUrl = isPhone
       ? `https://wa.me/${digitsOnly}?text=${encoded}`
       : `https://wa.me/?text=${encoded}`;
 
-    console.log("[magic-reminder] Opening WhatsApp:", { client: req.client_name, pendingCount: pendingItems.length, rejectedCount: rejectedItems.length, isPhone, waUrl });
     window.open(waUrl, "_blank");
   };
 
@@ -530,14 +540,9 @@ const DashboardPage = () => {
         return;
       }
 
-      console.log("[download-zip] Starting for request:", requestId);
       toast.info("Gerando ZIP... aguarde ⏳");
-
-      // Use raw fetch to preserve binary data — supabase.functions.invoke
-      // parses as JSON by default, corrupting the ZIP bytes
       const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
       const functionUrl = `https://${projectId}.supabase.co/functions/v1/download-zip`;
-      console.log("[download-zip] Calling:", functionUrl);
 
       const response = await fetch(functionUrl, {
         method: "POST",
@@ -549,11 +554,8 @@ const DashboardPage = () => {
         body: JSON.stringify({ requestId }),
       });
 
-      console.log("[download-zip] Response status:", response.status, response.headers.get("content-type"));
-
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error("[download-zip] Error body:", errorBody);
         let errorMsg = "Erro ao gerar ZIP";
         try {
           const parsed = JSON.parse(errorBody);
@@ -564,8 +566,6 @@ const DashboardPage = () => {
       }
 
       const blob = await response.blob();
-      console.log("[download-zip] ✅ Blob received, size:", blob.size, "type:", blob.type);
-
       if (blob.size === 0) {
         toast.error("ZIP vazio — nenhum arquivo aprovado encontrado");
         return;
@@ -581,7 +581,6 @@ const DashboardPage = () => {
       URL.revokeObjectURL(url);
       toast.success("Download concluído! 📦");
     } catch (err: any) {
-      console.error("[download-zip] Exception:", err);
       toast.error("Erro ao baixar ZIP", { description: err.message });
     } finally {
       setDownloadingZipId(null);
@@ -607,7 +606,6 @@ const DashboardPage = () => {
     return matchesFilter && matchesSearch;
   }) ?? [];
 
-  // Group uploads by client name
   const uploadsByClient = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
     const clientName = file.request_items?.document_requests?.client_name ?? "Sem cliente";
     if (!acc[clientName]) acc[clientName] = [];
@@ -664,7 +662,6 @@ const DashboardPage = () => {
             )}
           </div>
           <div className="flex gap-2 flex-wrap">
-            {/* Cloud Sync (PRO) */}
             <Button
               variant="outline"
               size="sm"
@@ -675,7 +672,7 @@ const DashboardPage = () => {
               <Cloud className="mr-1.5 h-3 w-3" />
               ownCloud
             </Button>
-            {/* Create request */}
+
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
@@ -696,7 +693,6 @@ const DashboardPage = () => {
                     <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com ou 5514999..." type="text" className="rounded-xl" />
                   </div>
 
-                  {/* Templates */}
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" /> Templates Prontos</Label>
                     <div className="flex flex-wrap gap-2">
@@ -708,7 +704,6 @@ const DashboardPage = () => {
                     </div>
                   </div>
 
-                  {/* Document tags */}
                   <div className="space-y-2">
                     <Label>Documentos Comuns</Label>
                     <div className="flex flex-wrap gap-1.5">
@@ -734,7 +729,6 @@ const DashboardPage = () => {
                     </div>
                   </div>
 
-                  {/* Custom document with type selector */}
                   <div className="space-y-2">
                     <Label>Adicionar Item Personalizado</Label>
                     <div className="flex gap-2">
@@ -764,7 +758,6 @@ const DashboardPage = () => {
                     </p>
                   </div>
 
-                  {/* Selected items */}
                   {checklistItems.length > 0 && (
                     <div className="space-y-2">
                       <Label>Itens selecionados ({checklistItems.length})</Label>
@@ -781,7 +774,6 @@ const DashboardPage = () => {
                     </div>
                   )}
 
-                  {/* Password protection (PRO) */}
                   <div className="space-y-2 rounded-xl border border-border/60 p-3">
                     <div className="flex items-center gap-2">
                       <Checkbox
@@ -808,7 +800,6 @@ const DashboardPage = () => {
                     )}
                   </div>
 
-                  {/* Link expiration (PRO) */}
                   <div className="space-y-2 rounded-xl border border-border/60 p-3">
                     <div className="flex items-center gap-2">
                       <Checkbox
@@ -859,7 +850,7 @@ const DashboardPage = () => {
           </div>
         </motion.div>
 
-        {/* ─── Stats Overview Cards ─── */}
+        {/* Stats Overview */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -871,7 +862,6 @@ const DashboardPage = () => {
             const totalUploads = uploads?.length ?? 0;
             const approvedUploads = uploads?.filter((u: any) => u.status === "approved").length ?? 0;
             const pendingUploads = uploads?.filter((u: any) => u.status === "pending").length ?? 0;
-            const rejectedUploads = uploads?.filter((u: any) => u.status === "rejected").length ?? 0;
             const completionRate = totalUploads > 0 ? Math.round((approvedUploads / totalUploads) * 100) : 0;
 
             const stats = [
@@ -912,8 +902,7 @@ const DashboardPage = () => {
 
           {/* ─── Solicitações Tab ─── */}
           <TabsContent value="requests">
-            {/* View mode toggle */}
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
               <Button
                 variant={viewMode === "list" ? "default" : "outline"}
                 size="sm"
@@ -929,6 +918,16 @@ const DashboardPage = () => {
                 onClick={() => setViewMode("kanban")}
               >
                 <Kanban className="mr-1.5 h-3.5 w-3.5" /> Kanban
+              </Button>
+
+              <Button
+                variant={showArchived ? "secondary" : "ghost"}
+                size="sm"
+                className="rounded-xl ml-auto text-muted-foreground"
+                onClick={() => setShowArchived(!showArchived)}
+              >
+                <Archive className="mr-1.5 h-3.5 w-3.5" /> 
+                {showArchived ? "Ocultar Engavetados" : "Ver Engavetados"}
               </Button>
             </div>
 
@@ -955,19 +954,23 @@ const DashboardPage = () => {
                   </div>
                 ))}
               </div>
-            ) : requests?.length === 0 ? (
+            ) : visibleRequests.length === 0 ? (
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
                 <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/10">
-                  <FileText className="h-10 w-10 text-primary/40" />
+                  {showArchived ? <Archive className="h-10 w-10 text-primary/40" /> : <FileText className="h-10 w-10 text-primary/40" />}
                 </div>
-                <p className="text-xl font-bold text-foreground mb-2">Tudo limpo por aqui! 🎉</p>
+                <p className="text-xl font-bold text-foreground mb-2">
+                  {showArchived ? "Nenhuma solicitação engavetada" : "Tudo limpo por aqui! 🎉"}
+                </p>
                 <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                  Nenhuma solicitação criada ainda. Clique em <strong>"Criar Solicitação"</strong> para enviar seu primeiro link.
+                  {showArchived 
+                    ? "As solicitações que você arquivar aparecerão aqui." 
+                    : 'Nenhuma solicitação ativa. Clique em "Criar Solicitação" para começar.'}
                 </p>
               </motion.div>
             ) : viewMode === "kanban" ? (
               <KanbanView
-                requests={requests ?? []}
+                requests={visibleRequests}
                 uploads={uploads ?? []}
                 isPro={isPro}
                 slug={slug ?? ""}
@@ -978,10 +981,15 @@ const DashboardPage = () => {
                 onDownloadZip={handleDownloadZip}
                 onUpgradeModal={() => setUpgradeModalOpen(true)}
                 formatDate={formatDate}
+                // Adicionando a prop para o kanban suportar a lixeira (se já não tiver, funcionará de forma segura)
+                onManageRequest={(id: string, name: string) => {
+                  setSelectedRequest({ id, clientName: name });
+                  setManageRequestOpen(true);
+                }}
               />
             ) : (
               <div className="space-y-3">
-                {requests?.map((req: any, i: number) => {
+                {visibleRequests.map((req: any, i: number) => {
                   const completed = req.request_items?.filter((item: any) => item.is_completed).length ?? 0;
                   const total = req.request_items?.length ?? 0;
                   const stageGroups = (req.request_items ?? []).reduce((acc: Record<string, any[]>, item: any) => {
@@ -1005,6 +1013,7 @@ const DashboardPage = () => {
                             {req.client_name}
                             {req.access_password && <LockIcon className="h-3.5 w-3.5 text-pro" />}
                             {isExpired && <Badge variant="destructive" className="text-[10px]">Expirado</Badge>}
+                            {req.status === "archived" && <Badge variant="secondary" className="text-[10px]">Engavetado</Badge>}
                             {req.expires_at && !isExpired && (
                               <Badge variant="outline" className="text-[10px] border-pro/40 text-pro">
                                 <Clock className="mr-0.5 h-2.5 w-2.5" /> {formatDate(req.expires_at)}
@@ -1019,6 +1028,20 @@ const DashboardPage = () => {
                           }`}>
                             {completed}/{total} enviados
                           </span>
+                          
+                          {/* Lixeira Actions */}
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="rounded-xl text-destructive hover:bg-destructive/10 px-2"
+                            onClick={() => {
+                              setSelectedRequest({ id: req.id, clientName: req.client_name });
+                              setManageRequestOpen(true);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+
                           <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)} className="rounded-xl transition-all duration-200">
                             {copiedId === req.id ? <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</> : <><Copy className="mr-1 h-3 w-3" /> Copiar link</>}
                           </Button>
@@ -1035,7 +1058,6 @@ const DashboardPage = () => {
                         </div>
                       </div>
 
-                      {/* Stage-grouped items */}
                       {Object.keys(stageGroups).length > 1 ? (
                         <Accordion type="multiple" className="mt-2">
                           {Object.entries(stageGroups).map(([stage, items]: [string, any[]]) => (
@@ -1069,7 +1091,6 @@ const DashboardPage = () => {
                         </div>
                       )}
 
-                      {/* Audit log timeline */}
                       {isPro && auditRequestId === req.id && company && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
@@ -1212,7 +1233,6 @@ const DashboardPage = () => {
           {/* ─── Settings Tab ─── */}
           <TabsContent value="settings">
             <div className="space-y-6">
-              {/* Basic settings */}
               <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
                 <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
                 <div className="space-y-4 max-w-md">
@@ -1231,7 +1251,6 @@ const DashboardPage = () => {
                 </div>
               </div>
 
-              {/* PRO: Branding */}
               <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
                 <div className="flex items-center gap-2 mb-4">
                   <Palette className="h-4 w-4 text-primary" />
@@ -1313,7 +1332,6 @@ const DashboardPage = () => {
                 </div>
               </div>
 
-              {/* PRO: OwnCloud Sync */}
               <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
                 <div className="flex items-center gap-2 mb-4">
                   <Cloud className="h-4 w-4 text-primary" />
@@ -1344,7 +1362,6 @@ const DashboardPage = () => {
                 </div>
               </div>
 
-              {/* Save button */}
               <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
                 {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
               </Button>
@@ -1353,6 +1370,50 @@ const DashboardPage = () => {
         </Tabs>
       </main>
 
+      {/* Manage Request Modal (Archive / Delete) */}
+      <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
+        <DialogContent className="max-w-sm rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>Gerenciar Solicitação</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 text-center">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground">
+              <AlertTriangle className="h-6 w-6 text-amber-500" />
+            </div>
+            <p className="text-sm text-muted-foreground mb-6">
+              O que você deseja fazer com a solicitação de <strong className="text-foreground">{selectedRequest?.clientName}</strong>?
+            </p>
+            <div className="flex flex-col gap-3">
+              <Button
+                variant="outline"
+                className="rounded-xl h-11"
+                onClick={() => selectedRequest && archiveRequest.mutate(selectedRequest.id)}
+                disabled={archiveRequest.isPending || deleteRequest.isPending}
+              >
+                {archiveRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
+                📦 Engavetar (Arquivar)
+              </Button>
+              <Button
+                variant="destructive"
+                className="rounded-xl h-11"
+                onClick={() => selectedRequest && deleteRequest.mutate(selectedRequest.id)}
+                disabled={archiveRequest.isPending || deleteRequest.isPending}
+              >
+                {deleteRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                🗑️ Excluir Permanentemente
+              </Button>
+              <Button
+                variant="ghost"
+                className="rounded-xl mt-2"
+                onClick={() => setManageRequestOpen(false)}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* File Preview Modal */}
       <ErrorBoundary fallbackMessage="Erro ao carregar pré-visualização do arquivo">
         <FilePreviewModal
@@ -1360,7 +1421,6 @@ const DashboardPage = () => {
           onOpenChange={setPreviewOpen}
           file={previewFile}
           onStatusChange={() => {
-            console.log("[dashboard] onStatusChange → invalidating uploads + requests");
             queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
             queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
           }}
