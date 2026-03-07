@@ -4,6 +4,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import ErrorBoundary from "@/components/ErrorBoundary";
+import CookieConsentBanner from "@/components/CookieConsentBanner";
 import Index from "./pages/Index";
 import AuthPage from "./pages/AuthPage";
 import ChecklistUploadPage from "./pages/ChecklistUploadPage";
@@ -33,15 +35,22 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/auth/login" element={<AuthPage />} />
-            <Route path="/admin/dashboard" element={<AdminDashboard />} />
-            <Route path="/:slug/enviar/:requestId" element={<ChecklistUploadPage />} />
-            <Route path="/:slug/dashboard" element={<DashboardPage />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <ErrorBoundary fallbackMessage="Ocorreu um erro na aplicação">
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/auth/login" element={<AuthPage />} />
+              <Route path="/admin/dashboard" element={<AdminDashboard />} />
+              <Route path="/:slug/enviar/:requestId" element={<ChecklistUploadPage />} />
+              <Route path="/:slug/dashboard" element={
+                <ErrorBoundary fallbackMessage="Erro ao carregar o Dashboard">
+                  <DashboardPage />
+                </ErrorBoundary>
+              } />
+              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </ErrorBoundary>
+          <CookieConsentBanner />
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
