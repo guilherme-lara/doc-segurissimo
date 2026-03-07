@@ -707,7 +707,7 @@ const ChecklistUploadPage = () => {
                       )}
 
                       {canUpload && !staged && !isUploading && processingItemId !== item.id && (
-                        <label className="cursor-pointer shrink-0">
+                        <label className={`shrink-0 ${lgpdAccepted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
                           <span
                             className="relative inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
                             style={brandColor ? { background: brandColor } : undefined}

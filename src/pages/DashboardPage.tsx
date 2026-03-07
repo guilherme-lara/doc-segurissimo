@@ -52,6 +52,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 import KanbanView from "@/components/dashboard/KanbanView";
 import { ThemeToggle } from "@/components/ThemeToggle";
