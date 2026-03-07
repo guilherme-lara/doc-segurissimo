@@ -1,14 +1,13 @@
 /**
  * KanbanView — Visão Kanban do Dashboard
- * 
- * Colunas:
+ * * Colunas:
  * - Aguardando Envio: nenhum item completado
  * - Em Revisão: alguns itens completados, mas nem todos aprovados
  * - Concluído: todos itens aprovados
  */
 
 import { motion } from "framer-motion";
-import { Copy, Check, LockIcon, MessageCircle, Archive, Loader2 } from "lucide-react";
+import { Copy, Check, LockIcon, MessageCircle, Archive, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -16,6 +15,7 @@ interface KanbanRequest {
   id: string;
   client_name: string;
   created_at: string;
+  status?: string;
   access_password?: string | null;
   expires_at?: string | null;
   request_items?: { id: string; item_name: string; is_completed: boolean; stage_name: string }[];
@@ -33,6 +33,7 @@ interface KanbanViewProps {
   onDownloadZip: (id: string, name: string) => void;
   onUpgradeModal: () => void;
   formatDate: (d: string) => string;
+  onManageRequest: (id: string, name: string) => void; // Nova Prop para exclusão/arquivamento
 }
 
 type Column = "waiting" | "reviewing" | "completed";
@@ -66,7 +67,7 @@ function classifyRequest(req: KanbanRequest, uploads: any[]): Column {
 
 export default function KanbanView({
   requests, uploads, isPro, slug, copiedId, downloadingZipId,
-  onCopy, onReminder, onDownloadZip, onUpgradeModal, formatDate,
+  onCopy, onReminder, onDownloadZip, onUpgradeModal, formatDate, onManageRequest
 }: KanbanViewProps) {
   const grouped: Record<Column, KanbanRequest[]> = { waiting: [], reviewing: [], completed: [] };
   
@@ -108,6 +109,7 @@ export default function KanbanView({
                         <h4 className="text-sm font-semibold text-card-foreground flex items-center gap-1.5">
                           {req.client_name}
                           {req.access_password && <LockIcon className="h-3 w-3 text-pro" />}
+                          {req.status === "archived" && <Badge variant="secondary" className="text-[10px] ml-1">Engavetado</Badge>}
                         </h4>
                         <p className="text-[11px] text-muted-foreground">{formatDate(req.created_at)}</p>
                       </div>
@@ -136,6 +138,15 @@ export default function KanbanView({
 
                     {/* Actions */}
                     <div className="flex gap-1.5 flex-wrap">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => onManageRequest(req.id, req.client_name)} 
+                        className="rounded-lg h-7 text-destructive hover:bg-destructive/10 px-2"
+                        title="Gerenciar Solicitação"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
                       <Button variant="outline" size="sm" onClick={() => onCopy(req.id)} className="rounded-lg h-7 text-[11px] px-2">
                         {copiedId === req.id ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
                       </Button>
