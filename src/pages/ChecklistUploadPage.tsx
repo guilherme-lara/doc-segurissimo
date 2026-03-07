@@ -752,7 +752,24 @@ const ChecklistUploadPage = () => {
           </div>
         ))}
 
-        {/* Watermark for free plans */}
+        {/* LGPD Consent Checkbox */}
+        <div className="mt-6 rounded-2xl border border-border/60 bg-card p-4 shadow-card">
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="lgpd-consent"
+              checked={lgpdAccepted}
+              onCheckedChange={(checked) => setLgpdAccepted(!!checked)}
+              className="mt-0.5"
+            />
+            <Label htmlFor="lgpd-consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
+              Declaro que li e aceito os <span className="text-primary font-medium">Termos de Uso</span> e a{" "}
+              <span className="text-primary font-medium">Política de Privacidade</span> (LGPD). 
+              Confirmo que os documentos enviados são autênticos e autorizo seu tratamento.
+            </Label>
+          </div>
+        </div>
+
+
         {plan?.show_watermark && (
           <div className="mt-6 text-center">
             <p className="text-xs text-muted-foreground/60">
