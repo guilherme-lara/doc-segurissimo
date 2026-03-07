@@ -606,11 +606,11 @@ const DashboardPage = () => {
     return matchesFilter && matchesSearch;
   }) ?? [];
 
-  // Group uploads by stage
-  const uploadsByStage = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
-    const stage = file.request_items?.stage_name ?? "Geral";
-    if (!acc[stage]) acc[stage] = [];
-    acc[stage].push(file);
+  // Group uploads by client name
+  const uploadsByClient = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
+    const clientName = file.request_items?.document_requests?.client_name ?? "Sem cliente";
+    if (!acc[clientName]) acc[clientName] = [];
+    acc[clientName].push(file);
     return acc;
   }, {});
 
@@ -1132,18 +1132,19 @@ const DashboardPage = () => {
                   Quando seus clientes enviarem documentos, eles aparecerão aqui para revisão.
                 </p>
               </motion.div>
-            ) : Object.keys(uploadsByStage).length > 1 ? (
-              <Accordion type="multiple" defaultValue={Object.keys(uploadsByStage)} className="space-y-2">
-                {Object.entries(uploadsByStage).map(([stage, files]) => (
-                  <AccordionItem key={stage} value={stage} className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
-                    <AccordionTrigger className="px-5 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider hover:no-underline">
-                      {stage} ({files.length})
+            ) : Object.keys(uploadsByClient).length > 0 ? (
+              <Accordion type="multiple" defaultValue={Object.keys(uploadsByClient)} className="space-y-2">
+                {Object.entries(uploadsByClient).map(([clientName, files]) => (
+                  <AccordionItem key={clientName} value={clientName} className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
+                    <AccordionTrigger className="px-5 py-3 text-sm font-semibold text-foreground hover:no-underline">
+                      👤 {clientName} <span className="ml-2 text-xs text-muted-foreground font-normal">({files.length} arquivo{files.length !== 1 ? "s" : ""})</span>
                     </AccordionTrigger>
                     <AccordionContent className="px-0 pb-0">
                       <Table>
                         <TableHeader>
                           <TableRow>
                             <TableHead>Arquivo</TableHead>
+                            <TableHead>Documento</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Tamanho</TableHead>
                             <TableHead>Data</TableHead>
@@ -1153,6 +1154,7 @@ const DashboardPage = () => {
                           {files.map((file: any) => (
                             <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
                               <TableCell className="font-medium">{file.file_name}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{file.request_items?.item_name ?? "—"}</TableCell>
                               <TableCell>
                                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                                   file.status === "approved" ? "bg-success/10 text-success" :
