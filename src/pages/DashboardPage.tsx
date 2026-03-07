@@ -1354,16 +1354,18 @@ const DashboardPage = () => {
       </main>
 
       {/* File Preview Modal */}
-      <FilePreviewModal
-        open={previewOpen}
-        onOpenChange={setPreviewOpen}
-        file={previewFile}
-        onStatusChange={() => {
-          console.log("[dashboard] onStatusChange → invalidating uploads + requests");
-          queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
-          queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
-        }}
-      />
+      <ErrorBoundary fallbackMessage="Erro ao carregar pré-visualização do arquivo">
+        <FilePreviewModal
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+          file={previewFile}
+          onStatusChange={() => {
+            console.log("[dashboard] onStatusChange → invalidating uploads + requests");
+            queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
+            queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
+          }}
+        />
+      </ErrorBoundary>
 
       {/* Pro Upgrade Modal */}
       <Dialog open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen}>
