@@ -375,13 +375,19 @@ const Index = () => {
 
       {/* Footer */}
       <footer className="border-t border-border/40 py-8">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4">
+        <div className="mx-auto flex flex-col md:flex-row max-w-6xl items-center justify-between gap-6 px-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg gradient-primary">
               <Shield className="h-3.5 w-3.5 text-primary-foreground" />
             </div>
-            <span className="text-sm font-semibold text-muted-foreground">Portal Seguríssimo</span>
+            <span className="text-sm font-semibold text-muted-foreground">Doc Seguríssimo</span>
           </div>
+          
+          <div className="flex items-center gap-6 text-sm font-medium text-muted-foreground">
+            <Link to="/termos" className="hover:text-foreground transition-colors">Termos de Uso</Link>
+            <Link to="/privacidade" className="hover:text-foreground transition-colors">Política de Privacidade</Link>
+          </div>
+
           <p className="text-xs text-muted-foreground">© {new Date().getFullYear()} Todos os direitos reservados</p>
         </div>
       </footer>
