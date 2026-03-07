@@ -284,6 +284,10 @@ const ChecklistUploadPage = () => {
   const confirmUpload = async (itemId: string) => {
     const file = stagedFiles[itemId];
     if (!file || !company || !request) return;
+    if (!lgpdAccepted) {
+      toast.warning("Aceite os termos LGPD antes de enviar.");
+      return;
+    }
 
     setUploadingItemId(itemId);
     setUploadProgress(10);
@@ -307,7 +311,8 @@ const ChecklistUploadPage = () => {
         file_size: file.size,
         file_path: filePath,
         content_type: file.type || "application/octet-stream",
-      });
+        lgpd_consent: true,
+      } as any);
 
       if (dbError) throw new Error(`Falha ao registrar: ${dbError.message}`);
       setUploadProgress(100);
