@@ -81,6 +81,7 @@ const ChecklistUploadPage = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<Record<string, File>>({});
+  const [lgpdAccepted, setLgpdAccepted] = useState(false);
 
   // Password protection state
   const [passwordInput, setPasswordInput] = useState("");
