@@ -39,6 +39,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -79,6 +81,7 @@ const ChecklistUploadPage = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<Record<string, File>>({});
+  const [lgpdAccepted, setLgpdAccepted] = useState(false);
 
   // Password protection state
   const [passwordInput, setPasswordInput] = useState("");
@@ -281,6 +284,10 @@ const ChecklistUploadPage = () => {
   const confirmUpload = async (itemId: string) => {
     const file = stagedFiles[itemId];
     if (!file || !company || !request) return;
+    if (!lgpdAccepted) {
+      toast.warning("Aceite os termos LGPD antes de enviar.");
+      return;
+    }
 
     setUploadingItemId(itemId);
     setUploadProgress(10);
@@ -304,7 +311,8 @@ const ChecklistUploadPage = () => {
         file_size: file.size,
         file_path: filePath,
         content_type: file.type || "application/octet-stream",
-      });
+        lgpd_consent: true,
+      } as any);
 
       if (dbError) throw new Error(`Falha ao registrar: ${dbError.message}`);
       setUploadProgress(100);
@@ -699,7 +707,7 @@ const ChecklistUploadPage = () => {
                       )}
 
                       {canUpload && !staged && !isUploading && processingItemId !== item.id && (
-                        <label className="cursor-pointer shrink-0">
+                        <label className={`shrink-0 ${lgpdAccepted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
                           <span
                             className="relative inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
                             style={brandColor ? { background: brandColor } : undefined}
@@ -712,6 +720,7 @@ const ChecklistUploadPage = () => {
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp,.pdf"
+                            disabled={!lgpdAccepted}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) stageFile(item.id, file);
@@ -744,7 +753,24 @@ const ChecklistUploadPage = () => {
           </div>
         ))}
 
-        {/* Watermark for free plans */}
+        {/* LGPD Consent Checkbox */}
+        <div className="mt-6 rounded-2xl border border-border/60 bg-card p-4 shadow-card">
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="lgpd-consent"
+              checked={lgpdAccepted}
+              onCheckedChange={(checked) => setLgpdAccepted(!!checked)}
+              className="mt-0.5"
+            />
+            <Label htmlFor="lgpd-consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
+              Declaro que li e aceito os <span className="text-primary font-medium">Termos de Uso</span> e a{" "}
+              <span className="text-primary font-medium">Política de Privacidade</span> (LGPD). 
+              Confirmo que os documentos enviados são autênticos e autorizo seu tratamento.
+            </Label>
+          </div>
+        </div>
+
+
         {plan?.show_watermark && (
           <div className="mt-6 text-center">
             <p className="text-xs text-muted-foreground/60">

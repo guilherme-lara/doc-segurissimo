@@ -1,0 +1,1 @@
+ALTER TABLE public.uploads ADD COLUMN IF NOT EXISTS lgpd_consent boolean NOT NULL DEFAULT false;
