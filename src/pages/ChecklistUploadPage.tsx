@@ -720,6 +720,7 @@ const ChecklistUploadPage = () => {
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp,.pdf"
+                            disabled={!lgpdAccepted}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) stageFile(item.id, file);
