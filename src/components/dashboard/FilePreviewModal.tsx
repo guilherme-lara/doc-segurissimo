@@ -1,18 +1,12 @@
 /**
  * FilePreviewModal — Modal de pré-visualização para o profissional
  *
- * Exibe imagens via <img> e PDFs via <iframe>.
+ * Exibe imagens via <img> e PDFs via <object> com fallback para download.
  * Botões de Aprovar (✅), Rejeitar (❌) e Baixar (⬇️).
  * Rejeição inclui campo de motivo (rejection_reason).
- *
- * NOTA para migração: O Signed URL é gerado via supabase.storage.createSignedUrl.
- * No servidor próprio, usar endpoint equivalente com autenticação JWT.
- *
- * SCHEMA: uploads.rejection_reason TEXT (nullable)
- * Quando status='rejected', o motivo é salvo e exibido ao cliente.
  */
 import { useState, useEffect } from "react";
-import { CheckCircle2, XCircle, Download, FileText, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Download, FileText, Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -44,6 +38,7 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
   const [updating, setUpdating] = useState(false);
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
 
   const isImage = file?.content_type?.startsWith("image/");
   const isPdf = file?.content_type === "application/pdf";
@@ -53,16 +48,21 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       setSignedUrl(null);
       setShowRejectForm(false);
       setRejectionReason("");
+      setPdfLoadFailed(false);
       return;
     }
     setLoading(true);
+    setPdfLoadFailed(false);
+    console.log("[preview] Generating signed URL for:", file.file_path, "content_type:", file.content_type);
     supabase.storage
       .from("uploads")
       .createSignedUrl(file.file_path, 300)
       .then(({ data, error }) => {
         if (error) {
+          console.error("[preview] Signed URL error:", error.message);
           toast.error("Erro ao carregar preview");
         } else {
+          console.log("[preview] ✅ Signed URL generated:", data.signedUrl?.substring(0, 80) + "...");
           setSignedUrl(data.signedUrl);
         }
         setLoading(false);
@@ -97,9 +97,8 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
           ? (res.error as any).message
           : JSON.stringify(res.error);
         console.error("[owncloud-sync] ❌ Sync failed:", errorDetail);
-        // Only show error if ownCloud is configured (code !== NOT_CONFIGURED)
         if (res.data?.code !== "NOT_CONFIGURED") {
-          toast.error("Erro ao sincronizar com ownCloud. Verifique credenciais ou regras de CORS.", {
+          toast.error("Erro ao sincronizar com ownCloud.", {
             description: errorDetail,
             duration: 8000,
           });
@@ -114,10 +113,6 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       }
     } catch (syncErr: any) {
       console.error("[owncloud-sync] Edge function exception:", syncErr);
-      toast.error("Erro ao sincronizar com ownCloud. Verifique credenciais ou regras de CORS.", {
-        description: syncErr?.message || String(syncErr),
-        duration: 8000,
-      });
     }
 
     onStatusChange?.();
@@ -130,18 +125,15 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
       return;
     }
     setUpdating(true);
-    console.log("[reject] Rejecting file:", file.id, "reason:", rejectionReason.trim());
     const { error } = await supabase
       .from("uploads")
       .update({ status: "rejected", rejection_reason: rejectionReason.trim() } as any)
       .eq("id", file.id);
     setUpdating(false);
     if (error) {
-      console.error("[reject] Error:", error.message);
       toast.error("Erro ao rejeitar");
       return;
     }
-    console.log("[reject] ❌ File rejected successfully");
     toast.success("Arquivo rejeitado ❌");
     setShowRejectForm(false);
     setRejectionReason("");
@@ -183,13 +175,31 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           ) : isImage && signedUrl ? (
             <img src={signedUrl} alt={file?.file_name} className="max-w-full max-h-[60vh] object-contain" />
-          ) : isPdf && signedUrl ? (
-            <iframe src={signedUrl} className="w-full h-[60vh]" title={file?.file_name} />
+          ) : isPdf && signedUrl && !pdfLoadFailed ? (
+            <object
+              data={signedUrl}
+              type="application/pdf"
+              className="w-full h-[60vh]"
+              onError={() => {
+                console.log("[preview] PDF object tag failed to load, showing fallback");
+                setPdfLoadFailed(true);
+              }}
+            >
+              {/* Fallback inside object tag if browser doesn't support PDF rendering */}
+              <PdfFallback fileName={file?.file_name} onDownload={handleDownload} />
+            </object>
+          ) : isPdf && signedUrl && pdfLoadFailed ? (
+            <PdfFallback fileName={file?.file_name} onDownload={handleDownload} />
           ) : (
             <div className="flex flex-col items-center gap-3 text-muted-foreground py-12">
               <FileText className="h-12 w-12" />
               <p className="text-sm">Pré-visualização não disponível para este tipo de arquivo</p>
               <p className="text-xs">{file?.content_type} · {file ? formatSize(file.file_size) : ""}</p>
+              {signedUrl && (
+                <Button variant="outline" className="rounded-xl mt-2" onClick={handleDownload}>
+                  <Download className="mr-2 h-4 w-4" /> Baixar arquivo
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -279,5 +289,23 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
     </Dialog>
   );
 };
+
+/** PDF Fallback component for unsupported browsers (mobile, etc.) */
+const PdfFallback = ({ fileName, onDownload }: { fileName?: string; onDownload: () => void }) => (
+  <div className="flex flex-col items-center gap-4 text-muted-foreground py-12 px-6 text-center">
+    <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
+      <AlertTriangle className="h-8 w-8 text-destructive/60" />
+    </div>
+    <p className="text-sm font-medium text-foreground">
+      A pré-visualização de PDF não é suportada neste navegador.
+    </p>
+    <p className="text-xs text-muted-foreground">
+      {fileName ?? "Arquivo PDF"}
+    </p>
+    <Button onClick={onDownload} className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
+      <Download className="mr-2 h-4 w-4" /> Baixar PDF para visualizar
+    </Button>
+  </div>
+);
 
 export default FilePreviewModal;
