@@ -1,0 +1,2 @@
+ALTER TABLE public.document_requests DROP CONSTRAINT document_requests_status_check;
+ALTER TABLE public.document_requests ADD CONSTRAINT document_requests_status_check CHECK (status IN ('pending', 'in_progress', 'completed', 'archived'));
