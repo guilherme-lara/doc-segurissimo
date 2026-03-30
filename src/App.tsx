@@ -12,6 +12,7 @@ import ChecklistUploadPage from "./pages/ChecklistUploadPage";
 import DashboardPage from "./pages/DashboardPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import NotFound from "./pages/NotFound";
+import TemplatePage from "./pages/TemplatePage";
 
 // Imports das Páginas Legais LGPD
 import TermosUso from "./pages/TermosUso";
@@ -52,7 +53,7 @@ const App = () => (
                   <DashboardPage />
                 </ErrorBoundary>
               } />
-              
+              <Route path="/:slug/templates" element={<TemplatePage />} />
               {/* Rotas Legais Adicionadas */}
               <Route path="/termos" element={<TermosUso />} />
               <Route path="/privacidade" element={<Politica />} />
