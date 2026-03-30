@@ -294,9 +294,9 @@ const Index = () => {
                   </li>
                 ))}
               </ul>
-              <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer">
+              <a href="https://invoice.infinitepay.io/plans/ribeiro-guilherme-11k/IkbXHsuur"  rel="noopener noreferrer">
                 <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                  Assinar Pro via WhatsApp <ArrowRight className="ml-2 h-4 w-4" />
+                  Assinar Pro <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </a>
             </motion.div>
