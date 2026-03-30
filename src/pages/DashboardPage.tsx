@@ -4,7 +4,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,16 +13,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
-} from "@/components/ui/dialog";
-import {
-  Accordion, AccordionContent, AccordionItem, AccordionTrigger,
-} from "@/components/ui/accordion";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -33,7 +27,7 @@ import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 import KanbanView from "@/components/dashboard/KanbanView";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-// ─── Documentos e Templates Padrão ───
+// ─── Constantes de Documentos ───
 const COMMON_DOCUMENTS = [
   { label: "RG / CNH", stage: "Documentos Pessoais" },
   { label: "CPF", stage: "Documentos Pessoais" },
@@ -61,6 +55,7 @@ const TEMPLATES = [
     items: [
       { label: "RG / CNH", stage: "Documentos Pessoais" },
       { label: "CPF", stage: "Documentos Pessoais" },
+      { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
       { label: "Contrato Social", stage: "Documentos Empresariais" },
       { label: "Cartão CNPJ", stage: "Documentos Empresariais" },
     ],
@@ -77,10 +72,10 @@ const DashboardPage = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // Estados Globais
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
-
-  // UI States
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
   const [showArchived, setShowArchived] = useState(false);
   const [manageRequestOpen, setManageRequestOpen] = useState(false);
@@ -94,7 +89,7 @@ const DashboardPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
 
-  // Form States
+  // Estados de Formulário
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
@@ -106,7 +101,7 @@ const DashboardPage = () => {
   const [linkExpiration, setLinkExpiration] = useState(false);
   const [expirationDays, setExpirationDays] = useState(7);
 
-  // Branding & Config
+  // Estados de Branding
   const [brandColor, setBrandColor] = useState("#7c3aed");
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -118,7 +113,7 @@ const DashboardPage = () => {
   const [owncloudUser, setOwncloudUser] = useState("");
   const [owncloudToken, setOwncloudToken] = useState("");
 
-  // 1. Fetch Company & Plan
+  // 1. Queries de Dados
   const { data: company, isLoading: companyLoading } = useQuery({
     queryKey: ["company", slug],
     queryFn: async () => {
@@ -133,7 +128,6 @@ const DashboardPage = () => {
     queryKey: ["plan", company?.id],
     queryFn: async () => {
       const { data, error } = await supabase.from("user_plans").select("*").eq("company_id", company!.id).single();
-      if (error) throw error;
       return data;
     },
     enabled: !!company?.id,
@@ -155,7 +149,6 @@ const DashboardPage = () => {
     }
   }, [company]);
 
-  // 2. Fetch Requests & Uploads
   const { data: requests, isLoading: requestsLoading } = useQuery({
     queryKey: ["requests", company?.id],
     queryFn: async () => {
@@ -164,8 +157,7 @@ const DashboardPage = () => {
         .select("*, request_items(id, item_name, stage_name, is_completed, sort_order)")
         .eq("company_id", company!.id)
         .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      return data ?? [];
     },
     enabled: !!company?.id,
   });
@@ -187,33 +179,47 @@ const DashboardPage = () => {
     queryKey: ["my-custom-templates", company?.id],
     queryFn: async () => {
       const { data, error } = await supabase.from("templates").select("*, template_items(*)").eq("company_id", company!.id);
-      if (error) throw error;
       return data;
     },
     enabled: !!company?.id && isPro,
   });
 
-  // 3. Logic & Deduplication (Raio-X)
-  const normalizeForCheck = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/gi, '');
+  // 2. Lógica de Filtros (AQUI ESTAVA O ERRO)
+  const filteredUploads = useMemo(() => {
+    return uploads?.filter((file: any) => {
+      const matchesFilter = fileFilter === "all" || file.status === fileFilter;
+      const query = searchQuery.toLowerCase();
+      const matchesSearch = !query ||
+        file.file_name?.toLowerCase().includes(query) ||
+        file.request_items?.document_requests?.client_name?.toLowerCase().includes(query) ||
+        file.request_items?.item_name?.toLowerCase().includes(query);
+      return matchesFilter && matchesSearch;
+    }) ?? [];
+  }, [uploads, fileFilter, searchQuery]);
 
+  const pendingCount = uploads?.filter((f: any) => f.status === "pending").length ?? 0;
+  const approvedCount = uploads?.filter((f: any) => f.status === "approved").length ?? 0;
+  const rejectedCount = uploads?.filter((f: any) => f.status === "rejected").length ?? 0;
+
+  // 3. Lógica de Anti-Duplicidade
+  const normalize = (str: string) => str?.toLowerCase().replace(/[^a-z0-9]/gi, '') || '';
+  
   const allAvailableItems = useMemo(() => {
     const itemsMap = new Map();
     const addItem = (stage: string, name: string, type: string) => {
-      const key = normalizeForCheck(name);
+      const key = normalize(name);
       if (!itemsMap.has(key)) itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
     };
     COMMON_DOCUMENTS.forEach(doc => addItem(doc.stage, doc.label, "file"));
     TEMPLATES.forEach(tpl => tpl.items.forEach(item => addItem(item.stage, item.label, "file")));
-    if (customTemplates) {
-      customTemplates.forEach((tpl: any) => tpl.template_items?.forEach((ti: any) => addItem(ti.stage_name, ti.item_name, ti.item_type || "file")));
-    }
+    customTemplates?.forEach((tpl: any) => tpl.template_items?.forEach((ti: any) => addItem(ti.stage_name, ti.item_name, ti.item_type || "file")));
     return Array.from(itemsMap.values()).sort((a: any, b: any) => a.itemName.localeCompare(b.itemName));
   }, [customTemplates]);
 
-  // 4. Realtime Updates
+  // 4. Realtime
   useEffect(() => {
     if (!company?.id) return;
-    const channel = supabase.channel(`db-changes-${company.id}`)
+    const channel = supabase.channel(`dashboard-realtime-${company.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` }, () => {
         queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
         queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
@@ -227,8 +233,8 @@ const DashboardPage = () => {
 
   // 5. Handlers
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
-    const key = normalizeForCheck(label);
-    if (checklistItems.some(i => normalizeForCheck(i.itemName) === key)) {
+    const key = normalize(label);
+    if (checklistItems.some(i => normalize(i.itemName) === key)) {
       toast.warning("Este item já está na lista!");
       return;
     }
@@ -244,8 +250,8 @@ const DashboardPage = () => {
   const applyTemplate = (template: any) => {
     const merged = [...checklistItems];
     template.items.forEach((t: any) => {
-      const key = normalizeForCheck(t.label || t.item_name);
-      if (!merged.some(m => normalizeForCheck(m.itemName) === key)) {
+      const key = normalize(t.label || t.item_name);
+      if (!merged.some(m => normalize(m.itemName) === key)) {
         merged.push({ stageName: t.stage || t.stage_name, itemName: (t.label || t.item_name).trim(), itemType: t.item_type || "file" });
       }
     });
@@ -255,7 +261,7 @@ const DashboardPage = () => {
 
   const createRequest = useMutation({
     mutationFn: async () => {
-      if (!company || !clientName.trim() || checklistItems.length === 0) throw new Error("Dados incompletos");
+      if (!company || !clientName.trim() || checklistItems.length === 0) throw new Error("Dados incompletos.");
       const { data: req, error: reqErr } = await supabase.from("document_requests").insert({
         company_id: company.id, client_name: clientName, client_email: clientEmail || null,
         access_password: isPro && passwordProtect ? accessPassword : null,
@@ -287,13 +293,11 @@ const DashboardPage = () => {
       if (!res.ok) throw new Error("Erro ao gerar ZIP");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `${name} - Documentos.zip`; a.click();
-      toast.success("Download concluído! 📦");
+      const a = document.createElement("a"); a.href = url; a.download = `${name}.zip`; a.click();
+      toast.success("Pronto! 📦");
     } catch (err: any) { toast.error(err.message); } finally { setDownloadingZipId(null); }
   }, []);
 
-  const formatSize = (b: number) => b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
-  
   const visibleRequests = requests?.filter((r: any) => showArchived ? r.status === "archived" : r.status !== "archived") ?? [];
 
   return (
@@ -301,11 +305,11 @@ const DashboardPage = () => {
       <header className="glass sticky top-0 z-50 border-b border-border/40">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl gradient-primary">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl gradient-primary shadow-sm">
               <Shield className="h-4 w-4 text-primary-foreground" />
             </div>
-            <span className="text-sm font-bold text-foreground">Seguríssimo</span>
-            {isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+            <span className="text-sm font-bold">Seguríssimo</span>
+            {isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -316,13 +320,12 @@ const DashboardPage = () => {
 
       <main className="mx-auto max-w-5xl px-4 py-8">
         <div className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
           <div className="flex gap-2 flex-wrap">
             <Button variant="outline" className="rounded-xl" onClick={() => navigate(`/${slug}/templates`)}>
               <LayoutList className="mr-1.5 h-4 w-4" /> Templates
             </Button>
             
-            {/* CONDICIONAL OWNCLOUD: Só aparece se estiver configurado */}
             {isPro && owncloudUrl && (
               <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setCloudSyncModalOpen(true)}>
                 <Cloud className="mr-1.5 h-3 w-3" /> ownCloud
@@ -339,22 +342,17 @@ const DashboardPage = () => {
                     <Input value={clientEmail} onChange={e => setClientEmail(e.target.value)} placeholder="E-mail/WhatsApp" className="rounded-xl" />
                   </div>
                   <div className="space-y-2 bg-accent/30 p-4 rounded-2xl border">
-                    <Label className="text-xs">Aplicar Templates</Label>
+                    <Label className="text-xs">Puxar Template Pronto</Label>
                     <div className="flex flex-wrap gap-2">
                       {TEMPLATES.map(tpl => <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} className="rounded-xl bg-background">{tpl.emoji} {tpl.name}</Button>)}
                     </div>
                   </div>
                   <div className="space-y-4 pt-2">
-                    <Label className="text-xs">Itens Individuais</Label>
+                    <Label className="text-xs font-semibold">Itens Individuais</Label>
                     <Select onValueChange={val => { const s = allAvailableItems.find(i => i.itemName === val); if (s) addDocumentTag(s.itemName, s.stageName, s.itemType); }}>
-                      <SelectTrigger className="rounded-xl bg-accent/20"><SelectValue placeholder="Puxar item existente..." /></SelectTrigger>
+                      <SelectTrigger className="rounded-xl bg-accent/20"><SelectValue placeholder="Pesquisar item salvo..." /></SelectTrigger>
                       <SelectContent>{allAvailableItems.map((it, idx) => <SelectItem key={idx} value={it.itemName}>{it.itemType === "text" ? "📝" : "📎"} {it.itemName}</SelectItem>)}</SelectContent>
                     </Select>
-                    <div className="flex gap-2">
-                      <Input placeholder="Categoria" value={customItemStage} onChange={e => setCustomItemStage(e.target.value)} className="rounded-xl w-32" />
-                      <Input placeholder="Nome do item..." value={customItemName} onChange={e => setCustomItemName(e.target.value)} className="rounded-xl flex-1" />
-                      <Button variant="outline" size="icon" onClick={addCustomItem} className="rounded-xl"><Plus className="h-4 w-4" /></Button>
-                    </div>
                   </div>
                   {checklistItems.length > 0 && (
                     <div className="flex flex-wrap gap-2 p-3 bg-accent/20 rounded-xl border border-dashed">
@@ -362,14 +360,14 @@ const DashboardPage = () => {
                     </div>
                   )}
                 </div>
-                <DialogFooter className="mt-4"><Button onClick={() => createRequest.mutate()} className="w-full rounded-xl gradient-primary h-11">Gerar Link ✨</Button></DialogFooter>
+                <DialogFooter className="mt-4"><Button onClick={() => createRequest.mutate()} className="w-full rounded-xl gradient-primary h-11">Gerar Link de Upload ✨</Button></DialogFooter>
               </DialogContent>
             </Dialog>
           </div>
         </div>
 
         <Tabs defaultValue="requests" className="w-full">
-          <TabsList className="mb-6 rounded-2xl"><TabsTrigger value="requests" className="rounded-xl">Solicitações</TabsTrigger><TabsTrigger value="files" className="rounded-xl">Arquivos</TabsTrigger><TabsTrigger value="settings" className="rounded-xl">Configurações</TabsTrigger></TabsList>
+          <TabsList className="mb-6 rounded-2xl"><TabsTrigger value="requests" className="rounded-xl">Solicitações</TabsTrigger><TabsTrigger value="files" className="rounded-xl">Arquivos</TabsTrigger></TabsList>
           
           <TabsContent value="requests">
              <div className="flex gap-2 mb-4">
@@ -377,54 +375,46 @@ const DashboardPage = () => {
                 <Button variant={viewMode === "kanban" ? "default" : "outline"} size="sm" onClick={() => setViewMode("kanban")} className="rounded-xl">Kanban</Button>
                 <Button variant="ghost" size="sm" onClick={() => setShowArchived(!showArchived)} className="ml-auto rounded-xl">{showArchived ? "Ver Ativas" : "Ver Engavetadas"}</Button>
              </div>
-             {requestsLoading ? <Skeleton className="h-40 w-full rounded-2xl" /> : visibleRequests.map((req: any) => (
-                <div key={req.id} className="mb-3 rounded-2xl border bg-card p-5 shadow-sm hover:shadow-md transition-all">
-                   <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="font-bold flex items-center gap-2">{req.client_name} {req.status === 'completed' && <CheckCircle2 className="h-4 w-4 text-success" />}</h3>
-                        <p className="text-xs text-muted-foreground">{new Date(req.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${slug}/enviar/${req.id}`); toast.success("Link copiado!"); }} className="rounded-xl">Copiar Link</Button>
-                        <Button variant="outline" size="sm" onClick={() => handleDownloadZip(req.id, req.client_name)} className="rounded-xl"><Archive className="h-4 w-4 mr-2" /> Baixar ZIP</Button>
-                        <Button variant="ghost" size="sm" onClick={() => { setSelectedRequest({ id: req.id, clientName: req.client_name }); setManageRequestOpen(true); }} className="rounded-xl text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></Button>
-                      </div>
-                   </div>
-                   <div className="flex flex-wrap gap-1.5">
-                      {req.request_items?.map((it: any) => <Badge key={it.id} variant={it.is_completed ? "default" : "secondary"} className={`rounded-full text-[10px] ${it.is_completed ? 'bg-success/20 text-success border-success/30' : ''}`}>{it.item_name}</Badge>)}
-                   </div>
-                </div>
-             ))}
+             {requestsLoading ? <Skeleton className="h-40 w-full rounded-2xl" /> : (
+              <div className="space-y-3">
+                {visibleRequests.map((req: any) => (
+                  <div key={req.id} className="rounded-2xl border bg-card p-5 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h3 className="font-bold flex items-center gap-2">{req.client_name} {req.status === 'completed' && <CheckCircle2 className="h-4 w-4 text-success" />}</h3>
+                          <p className="text-xs text-muted-foreground">{new Date(req.created_at).toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${slug}/enviar/${req.id}`); toast.success("Copiado!"); }} className="rounded-xl">Link</Button>
+                          <Button variant="outline" size="sm" onClick={() => handleDownloadZip(req.id, req.client_name)} className="rounded-xl" disabled={downloadingZipId === req.id}>ZIP</Button>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                        {req.request_items?.map((it: any) => <Badge key={it.id} variant={it.is_completed ? "default" : "secondary"} className={`rounded-full text-[10px] ${it.is_completed ? 'bg-success/20 text-success border-success/30' : ''}`}>{it.item_name}</Badge>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+             )}
           </TabsContent>
 
           <TabsContent value="files">
-             <div className="mb-4 relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Buscar arquivos..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-10 rounded-xl" /></div>
+             <div className="mb-4 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input placeholder="Buscar arquivos..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-10 rounded-xl" />
+             </div>
              <Table className="border rounded-2xl overflow-hidden">
-                <TableHeader><TableRow><TableHead>Arquivo</TableHead><TableHead>Cliente</TableHead><TableHead>Status</TableHead><TableHead>Data</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Arquivo</TableHead><TableHead>Status</TableHead><TableHead>Data</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {filteredUploads.map((file: any) => (
                     <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
                       <TableCell className="font-medium">{file.file_name}</TableCell>
-                      <TableCell className="text-xs">{file.request_items?.document_requests?.client_name}</TableCell>
                       <TableCell><Badge variant="outline" className={file.status === 'approved' ? 'text-success border-success/40' : file.status === 'rejected' ? 'text-destructive border-destructive/40' : ''}>{file.status}</Badge></TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{new Date(file.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{file.created_at ? new Date(file.created_at).toLocaleDateString() : "—"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
              </Table>
-          </TabsContent>
-
-          <TabsContent value="settings">
-            <div className="grid gap-6 max-w-2xl">
-              <div className="p-6 border rounded-2xl bg-card space-y-4">
-                <h3 className="font-bold">Perfil da Empresa</h3>
-                <div className="grid gap-4">
-                  <div><Label>Nome de Exibição</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} className="rounded-xl" /></div>
-                  <div><Label>ownCloud URL (PRO)</Label><Input placeholder="https://..." value={owncloudUrl} onChange={e => setOwncloudUrl(e.target.value)} className="rounded-xl" /></div>
-                </div>
-                <Button onClick={() => updateSettings.mutate()} className="rounded-xl gradient-primary">Salvar Alterações</Button>
-              </div>
-            </div>
           </TabsContent>
         </Tabs>
       </main>
@@ -434,26 +424,13 @@ const DashboardPage = () => {
           open={previewOpen}
           onOpenChange={setPreviewOpen}
           file={previewFile}
-          owncloudUrl={owncloudUrl} // PASSANDO A PROP PARA O MODAL
+          owncloudUrl={owncloudUrl}
           onStatusChange={() => {
             queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
             queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
           }}
         />
       </ErrorBoundary>
-
-      <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
-        <DialogContent className="max-w-sm rounded-3xl text-center">
-          <div className="py-4 space-y-4">
-            <div className="mx-auto w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center"><AlertTriangle className="text-destructive" /></div>
-            <p className="text-sm">Gerenciar solicitação de <b>{selectedRequest?.clientName}</b>?</p>
-            <div className="flex flex-col gap-2">
-              <Button variant="outline" className="rounded-xl" onClick={() => selectedRequest && archiveRequest.mutate(selectedRequest.id)}>Engavetar Solicitação</Button>
-              <Button variant="destructive" className="rounded-xl" onClick={() => selectedRequest && deleteRequest.mutate(selectedRequest.id)}>Excluir Permanentemente</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
