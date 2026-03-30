@@ -121,12 +121,14 @@ const DashboardPage = () => {
   // Audit log panel
   const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
 
-  // Branding
+  // Branding & Settings
   const [brandColor, setBrandColor] = useState("#7c3aed");
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [phone, setPhone] = useState("");
   const [logoUploading, setLogoUploading] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [slugValue, setSlugValue] = useState("");
 
   // OwnCloud config
   const [owncloudUrl, setOwncloudUrl] = useState("");
@@ -173,6 +175,8 @@ const DashboardPage = () => {
       setOwncloudUrl((company as any).owncloud_url ?? "");
       setOwncloudUser((company as any).owncloud_user ?? "");
       setOwncloudToken((company as any).owncloud_token ?? "");
+      setDisplayName(company.display_name);
+      setSlugValue(company.slug);
     }
   }, [company]);
 
@@ -208,7 +212,6 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
-  // Visibilidade de engavetados
   const visibleRequests = requests?.filter((r: any) => 
     showArchived ? r.status === "archived" : r.status !== "archived"
   ) ?? [];
@@ -235,7 +238,7 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
-  // ─── Buscar templates customizados (se for Pro) ───
+  // Buscar templates customizados (PRO)
   const { data: customTemplates } = useQuery({
     queryKey: ["my-custom-templates", company?.id],
     queryFn: async () => {
@@ -250,39 +253,39 @@ const DashboardPage = () => {
     enabled: !!company?.id && isPro,
   });
 
-  // ─── Lógica para o Dropdown Inteligente de Itens ───
+  // ─── RAIO-X: Normalização e Lógica Anti-Duplicidade ───
+  const normalizeForCheck = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/gi, '');
+
+  const isDuplicate = (newItemName: string) => {
+    const normalizedNew = normalizeForCheck(newItemName);
+    return checklistItems.some(item => normalizeForCheck(item.itemName) === normalizedNew);
+  };
+
   const allAvailableItems = useMemo(() => {
     const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
 
-    // Itens padrão
-    COMMON_DOCUMENTS.forEach(doc => {
-      itemsMap.set(doc.label, { stageName: doc.stage, itemName: doc.label, itemType: "file" });
-    });
+    const addItem = (stage: string, name: string, type: "file" | "text") => {
+      const key = normalizeForCheck(name);
+      if (!itemsMap.has(key)) {
+        itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
+      }
+    };
 
-    TEMPLATES.forEach(tpl => {
-      tpl.items.forEach(item => {
-        itemsMap.set(item.label, { stageName: item.stage, itemName: item.label, itemType: "file" });
-      });
-    });
+    COMMON_DOCUMENTS.forEach(doc => addItem(doc.stage, doc.label, "file"));
+    TEMPLATES.forEach(tpl => tpl.items.forEach(item => addItem(item.stage, item.label, "file")));
 
-    // Itens dos templates criados pelo usuário
     if (customTemplates) {
       customTemplates.forEach((tpl: any) => {
         tpl.template_items?.forEach((tItem: any) => {
-          itemsMap.set(tItem.item_name, { 
-            stageName: tItem.stage_name, 
-            itemName: tItem.item_name, 
-            itemType: tItem.item_type || "file" 
-          });
+          addItem(tItem.stage_name, tItem.item_name, tItem.item_type || "file");
         });
       });
     }
 
-    // Ordenar alfabeticamente pelo nome do item
     return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
   }, [customTemplates]);
 
-  // Realtime: listen for uploads changes to update dashboard instantly
+  // Realtime
   useEffect(() => {
     if (!company?.id) return;
 
@@ -293,6 +296,7 @@ const DashboardPage = () => {
         { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` },
         () => {
           queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
+          queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
         }
       )
       .on(
@@ -300,6 +304,7 @@ const DashboardPage = () => {
         { event: "*", schema: "public", table: "request_items" },
         () => {
           queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
+          queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
         }
       )
       .subscribe();
@@ -309,64 +314,67 @@ const DashboardPage = () => {
     };
   }, [company?.id, queryClient]);
 
-  // Settings state
-  const [displayName, setDisplayName] = useState("");
-  const [slugValue, setSlugValue] = useState("");
-
-  useEffect(() => {
-    if (company) {
-      setDisplayName(company.display_name);
-      setSlugValue(company.slug);
-    }
-  }, [company]);
-
-  // ─── Tag-based checklist management ───
+  // ─── Funções de manipulação do checklist ───
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
-    if (checklistItems.some((i) => i.itemName === label)) return;
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: label, itemType: type }]);
+    if (isDuplicate(label)) {
+      toast.warning(`O item "${label}" já está na lista!`);
+      return;
+    }
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: label.trim(), itemType: type }]);
   };
 
   const removeDocumentTag = (index: number) => {
     setChecklistItems(checklistItems.filter((_, i) => i !== index));
   };
 
+  const addCustomItem = () => {
+    const name = customItemName.trim();
+    const stage = customItemStage.trim() || "Geral";
+    
+    if (!name) return;
+    if (isDuplicate(name)) {
+      toast.warning(`O documento "${name}" já foi adicionado!`);
+      return;
+    }
+    
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
+    setCustomItemName("");
+  };
+
   const applyTemplate = (template: typeof TEMPLATES[number]) => {
     const merged = [...checklistItems];
+    let addedCount = 0;
+
     template.items.forEach((t) => {
-      if (!merged.some((m) => m.itemName === t.label)) {
-        merged.push({ stageName: t.stage, itemName: t.label, itemType: "file" });
+      if (!merged.some((m) => normalizeForCheck(m.itemName) === normalizeForCheck(t.label))) {
+        merged.push({ stageName: t.stage, itemName: t.label.trim(), itemType: "file" });
+        addedCount++;
       }
     });
+
     setChecklistItems(merged);
-    toast.success(`Template "${template.name}" aplicado 🎉`);
+    if (addedCount > 0) toast.success(`Template "${template.name}" aplicado 🎉`);
+    else toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
   };
 
   const applyCustomTemplate = (template: any) => {
     const merged = [...checklistItems];
+    let addedCount = 0;
+
     template.template_items.forEach((t: any) => {
-      if (!merged.some((m) => m.itemName === t.item_name)) {
+      if (!merged.some((m) => normalizeForCheck(m.itemName) === normalizeForCheck(t.item_name))) {
         merged.push({ 
           stageName: t.stage_name, 
-          itemName: t.item_name, 
+          itemName: t.item_name.trim(), 
           itemType: t.item_type || "file" 
         });
+        addedCount++;
       }
     });
-    setChecklistItems(merged);
-    toast.success(`Template "${template.name}" aplicado 🎉`);
-  };
 
-  const addCustomItem = () => {
-    const name = customItemName.trim();
-    const stage = customItemStage.trim() || "Geral"; // Pega a categoria ou usa "Geral"
-    if (!name) return;
-    if (checklistItems.some((i) => i.itemName === name)) {
-      toast.warning("Documento já adicionado");
-      return;
-    }
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
-    setCustomItemName("");
-    // Não limpa o stage para ele poder adicionar vários na mesma categoria facilmente
+    setChecklistItems(merged);
+    if (addedCount > 0) toast.success(`Template "${template.name}" aplicado 🎉`);
+    else toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
   };
 
   const activeRequestCount = requests?.filter((r: any) => r.status !== "completed" && r.status !== "archived").length ?? 0;
@@ -433,7 +441,6 @@ const DashboardPage = () => {
     },
   });
 
-  // Archive mutation
   const archiveRequest = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("document_requests").update({ status: "archived" }).eq("id", id);
@@ -447,7 +454,6 @@ const DashboardPage = () => {
     onError: (err: any) => toast.error("Erro ao engavetar", { description: err.message })
   });
 
-  // Delete mutation
   const deleteRequest = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from("document_requests").delete().eq("id", id);
@@ -461,7 +467,6 @@ const DashboardPage = () => {
     onError: (err: any) => toast.error("Erro ao excluir", { description: err.message })
   });
 
-  // Update settings
   const updateSettings = useMutation({
     mutationFn: async () => {
       if (!company) return;
@@ -635,7 +640,6 @@ const DashboardPage = () => {
 
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
 
-  // Filter uploads
   const filteredUploads = uploads?.filter((file: any) => {
     const matchesFilter = fileFilter === "all" || file.status === fileFilter;
     const query = searchQuery.toLowerCase();
@@ -659,7 +663,6 @@ const DashboardPage = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Top bar */}
       <header className="glass sticky top-0 z-50 border-b border-border/40">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-2.5">
@@ -683,7 +686,6 @@ const DashboardPage = () => {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-8">
-        {/* Actions */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -712,16 +714,18 @@ const DashboardPage = () => {
               {!isPro && <LockIcon className="ml-1.5 h-3 w-3 text-muted-foreground" />}
             </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-xl transition-all duration-200"
-              onClick={() => isPro ? setCloudSyncModalOpen(true) : setUpgradeModalOpen(true)}
-            >
-              {!isPro && <LockIcon className="mr-1.5 h-3 w-3" />}
-              <Cloud className="mr-1.5 h-3 w-3" />
-              ownCloud
-            </Button>
+            {/* CONDICIONAL OWNCLOUD APLICADA: Só aparece se for PRO E tiver configurado a URL */}
+            {isPro && owncloudUrl && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-xl transition-all duration-200"
+                onClick={() => setCloudSyncModalOpen(true)}
+              >
+                <Cloud className="mr-1.5 h-3 w-3" />
+                ownCloud
+              </Button>
+            )}
 
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
@@ -772,14 +776,12 @@ const DashboardPage = () => {
                   <div className="space-y-4 pt-2">
                     <Label className="text-base">Adicionar Itens Individuais</Label>
                     
-                    {/* DROPDOWN MÁGICO DE ITENS SALVOS */}
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">Puxar de um template existente:</Label>
                       <Select onValueChange={(val) => {
                           const selected = allAvailableItems.find(i => i.itemName === val);
                           if (selected) {
                             addDocumentTag(selected.itemName, selected.stageName, selected.itemType);
-                            toast.success(`"${selected.itemName}" adicionado!`);
                           }
                         }}>
                         <SelectTrigger className="w-full rounded-xl bg-accent/20">
@@ -801,7 +803,6 @@ const DashboardPage = () => {
                       <div className="h-px flex-1 bg-border/60" />
                     </div>
 
-                    {/* INPUTS PARA CRIAR NOVO ITEM */}
                     <div className="flex gap-2">
                       <Input
                         placeholder="Categoria (ex: Sócios)"
@@ -930,7 +931,6 @@ const DashboardPage = () => {
           </div>
         </motion.div>
 
-        {/* Stats Overview */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -980,7 +980,6 @@ const DashboardPage = () => {
             </TabsTrigger>
           </TabsList>
 
-          {/* ─── Solicitações Tab ─── */}
           <TabsContent value="requests">
             <div className="flex flex-wrap items-center gap-2 mb-4">
               <Button
@@ -1108,7 +1107,6 @@ const DashboardPage = () => {
                             {completed}/{total} enviados
                           </span>
                           
-                          {/* Lixeira Actions */}
                           <Button 
                             variant="ghost" 
                             size="sm" 
@@ -1187,7 +1185,6 @@ const DashboardPage = () => {
             )}
           </TabsContent>
 
-          {/* ─── Arquivos Tab ─── */}
           <TabsContent value="files">
             <div className="mb-4 flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
@@ -1309,7 +1306,6 @@ const DashboardPage = () => {
             )}
           </TabsContent>
 
-          {/* ─── Settings Tab ─── */}
           <TabsContent value="settings">
             <div className="space-y-6">
               <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
@@ -1449,7 +1445,7 @@ const DashboardPage = () => {
         </Tabs>
       </main>
 
-      {/* Manage Request Modal (Archive / Delete) */}
+      {/* Manage Request Modal */}
       <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
         <DialogContent className="max-w-sm rounded-3xl">
           <DialogHeader>
@@ -1533,7 +1529,7 @@ const DashboardPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Cloud Sync Modal - now shows OwnCloud info */}
+      {/* Cloud Sync Modal */}
       <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
         <DialogContent className="max-w-sm rounded-3xl text-center">
           <div className="flex flex-col items-center gap-4 py-4">
