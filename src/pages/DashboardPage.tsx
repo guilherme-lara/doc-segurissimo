@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -95,6 +96,7 @@ const DashboardPage = () => {
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [customItemStage, setCustomItemStage] = useState("");
   const [customItemName, setCustomItemName] = useState("");
   const [customItemType, setCustomItemType] = useState<"file" | "text">("file");
   const [passwordProtect, setPasswordProtect] = useState(false);
@@ -248,6 +250,38 @@ const DashboardPage = () => {
     enabled: !!company?.id && isPro,
   });
 
+  // ─── Lógica para o Dropdown Inteligente de Itens ───
+  const allAvailableItems = useMemo(() => {
+    const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
+
+    // Itens padrão
+    COMMON_DOCUMENTS.forEach(doc => {
+      itemsMap.set(doc.label, { stageName: doc.stage, itemName: doc.label, itemType: "file" });
+    });
+
+    TEMPLATES.forEach(tpl => {
+      tpl.items.forEach(item => {
+        itemsMap.set(item.label, { stageName: item.stage, itemName: item.label, itemType: "file" });
+      });
+    });
+
+    // Itens dos templates criados pelo usuário
+    if (customTemplates) {
+      customTemplates.forEach((tpl: any) => {
+        tpl.template_items?.forEach((tItem: any) => {
+          itemsMap.set(tItem.item_name, { 
+            stageName: tItem.stage_name, 
+            itemName: tItem.item_name, 
+            itemType: tItem.item_type || "file" 
+          });
+        });
+      });
+    }
+
+    // Ordenar alfabeticamente pelo nome do item
+    return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
+  }, [customTemplates]);
+
   // Realtime: listen for uploads changes to update dashboard instantly
   useEffect(() => {
     if (!company?.id) return;
@@ -287,9 +321,9 @@ const DashboardPage = () => {
   }, [company]);
 
   // ─── Tag-based checklist management ───
-  const addDocumentTag = (label: string, stage: string) => {
+  const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
     if (checklistItems.some((i) => i.itemName === label)) return;
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: label, itemType: "file" }]);
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: label, itemType: type }]);
   };
 
   const removeDocumentTag = (index: number) => {
@@ -307,7 +341,6 @@ const DashboardPage = () => {
     toast.success(`Template "${template.name}" aplicado 🎉`);
   };
 
-  // ─── Função para aplicar o template customizado (PRO) ───
   const applyCustomTemplate = (template: any) => {
     const merged = [...checklistItems];
     template.template_items.forEach((t: any) => {
@@ -325,13 +358,15 @@ const DashboardPage = () => {
 
   const addCustomItem = () => {
     const name = customItemName.trim();
+    const stage = customItemStage.trim() || "Geral"; // Pega a categoria ou usa "Geral"
     if (!name) return;
     if (checklistItems.some((i) => i.itemName === name)) {
       toast.warning("Documento já adicionado");
       return;
     }
-    setChecklistItems([...checklistItems, { stageName: "Outros", itemName: name, itemType: customItemType }]);
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
     setCustomItemName("");
+    // Não limpa o stage para ele poder adicionar vários na mesma categoria facilmente
   };
 
   const activeRequestCount = requests?.filter((r: any) => r.status !== "completed" && r.status !== "archived").length ?? 0;
@@ -667,7 +702,6 @@ const DashboardPage = () => {
             )}
           </div>
           <div className="flex gap-2 flex-wrap">
-            {/* NOVO BOTÃO DE TEMPLATES 🎨 */}
             <Button
               variant="outline"
               className="rounded-xl transition-all duration-200"
@@ -695,80 +729,92 @@ const DashboardPage = () => {
                   <Plus className="mr-2 h-4 w-4" /> Criar Solicitação
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl">
+              <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto rounded-3xl">
                 <DialogHeader>
                   <DialogTitle>Nova Solicitação 📄</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-5 mt-4">
-                  <div className="space-y-2">
-                    <Label>Nome do Cliente</Label>
-                    <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Ex: João Silva" className="rounded-xl" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>E-mail / WhatsApp do Cliente (opcional)</Label>
-                    <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com ou 5514999..." type="text" className="rounded-xl" />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Nome do Cliente</Label>
+                      <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Ex: João Silva" className="rounded-xl" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>E-mail / WhatsApp (opcional)</Label>
+                      <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com" type="text" className="rounded-xl" />
+                    </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5" /> Templates Prontos</Label>
-                    <div className="flex flex-wrap gap-2">
+                  <div className="space-y-2 bg-accent/30 p-4 rounded-2xl border border-border/40">
+                    <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5 text-primary" /> Aplicar Templates Inteiros</Label>
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {TEMPLATES.map((tpl) => (
-                        <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} type="button" className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200">
+                        <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} type="button" className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200 bg-background">
                           {tpl.emoji} {tpl.name}
                         </Button>
                       ))}
                     </div>
 
-                    {/* RENDERIZAR OS TEMPLATES CUSTOMIZADOS AQUI 👇 */}
                     {isPro && customTemplates && customTemplates.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-border/50">
                         <Label className="flex items-center gap-1.5 mb-2"><Crown className="h-3.5 w-3.5 text-pro" /> Meus Templates</Label>
                         <div className="flex flex-wrap gap-2">
                           {customTemplates.map((tpl: any) => (
-                            <Button key={tpl.id} variant="outline" size="sm" onClick={() => applyCustomTemplate(tpl)} type="button" className="rounded-xl border-pro/30 hover:bg-pro/10 hover:text-pro transition-all duration-200">
+                            <Button key={tpl.id} variant="outline" size="sm" onClick={() => applyCustomTemplate(tpl)} type="button" className="rounded-xl border-pro/30 hover:bg-pro/10 hover:text-pro transition-all duration-200 bg-background">
                               <FileText className="mr-1.5 h-3.5 w-3.5" /> {tpl.name}
                             </Button>
                           ))}
                         </div>
                       </div>
                     )}
-                    {/* FIM DA RENDERIZAÇÃO CUSTOMIZADA */}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Documentos Comuns</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {COMMON_DOCUMENTS.map((doc) => {
-                        const isAdded = checklistItems.some((i) => i.itemName === doc.label);
-                        return (
-                          <button
-                            key={doc.label}
-                            type="button"
-                            onClick={() => addDocumentTag(doc.label, doc.stage)}
-                            disabled={isAdded}
-                            className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
-                              isAdded
-                                ? "border-primary/30 bg-primary/10 text-primary cursor-default"
-                                : "border-border bg-card text-foreground hover:border-primary hover:bg-accent cursor-pointer hover:scale-[1.02]"
-                            }`}
-                          >
-                            {isAdded && <Check className="mr-1 h-3 w-3" />}
-                            {doc.label}
-                          </button>
-                        );
-                      })}
+                  <div className="space-y-4 pt-2">
+                    <Label className="text-base">Adicionar Itens Individuais</Label>
+                    
+                    {/* DROPDOWN MÁGICO DE ITENS SALVOS */}
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Puxar de um template existente:</Label>
+                      <Select onValueChange={(val) => {
+                          const selected = allAvailableItems.find(i => i.itemName === val);
+                          if (selected) {
+                            addDocumentTag(selected.itemName, selected.stageName, selected.itemType);
+                            toast.success(`"${selected.itemName}" adicionado!`);
+                          }
+                        }}>
+                        <SelectTrigger className="w-full rounded-xl bg-accent/20">
+                          <SelectValue placeholder="Selecione um item salvo nos seus templates..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allAvailableItems.map((item, idx) => (
+                            <SelectItem key={idx} value={item.itemName}>
+                              {item.itemType === "text" ? "📝" : "📎"} {item.itemName} <span className="text-muted-foreground ml-1">({item.stageName})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <Label>Adicionar Item Personalizado</Label>
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="h-px flex-1 bg-border/60" />
+                      <span className="text-[10px] text-muted-foreground font-semibold tracking-wider uppercase">OU CRIE UM NOVO AGORA</span>
+                      <div className="h-px flex-1 bg-border/60" />
+                    </div>
+
+                    {/* INPUTS PARA CRIAR NOVO ITEM */}
                     <div className="flex gap-2">
+                      <Input
+                        placeholder="Categoria (ex: Sócios)"
+                        value={customItemStage}
+                        onChange={(e) => setCustomItemStage(e.target.value)}
+                        className="rounded-xl w-[140px] shrink-0"
+                      />
                       <Input
                         placeholder={customItemType === "text" ? "Ex: Qual seu CPF?" : "Nome do documento..."}
                         value={customItemName}
                         onChange={(e) => setCustomItemName(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
-                        className="rounded-xl"
+                        className="rounded-xl flex-1"
                       />
                       <Button
                         variant={customItemType === "text" ? "default" : "outline"}
@@ -784,20 +830,21 @@ const DashboardPage = () => {
                         <Plus className="h-4 w-4" />
                       </Button>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground mt-1">
                       {customItemType === "text" ? "📝 Campo de texto — o cliente digitará a resposta" : "📎 Upload de arquivo — o cliente enviará um documento"}
                     </p>
                   </div>
 
                   {checklistItems.length > 0 && (
-                    <div className="space-y-2">
-                      <Label>Itens selecionados ({checklistItems.length})</Label>
-                      <div className="flex flex-wrap gap-1.5">
+                    <div className="space-y-3 bg-accent/20 p-4 rounded-2xl border border-border/40 mt-4">
+                      <Label>Seu Checklist Final ({checklistItems.length} itens)</Label>
+                      <div className="flex flex-wrap gap-2">
                         {checklistItems.map((item, i) => (
-                          <Badge key={i} variant="secondary" className="gap-1 pr-1 rounded-full">
+                          <Badge key={i} variant="secondary" className="gap-1 pr-1.5 py-1 rounded-full text-xs font-medium bg-background border border-border/50">
                             {item.itemType === "text" ? "📝" : "📎"} {item.itemName}
-                            <button type="button" onClick={() => removeDocumentTag(i)} className="ml-0.5 rounded-full p-0.5 hover:bg-destructive/20 transition-colors">
-                              <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                            <span className="text-[10px] text-muted-foreground ml-1">({item.stageName})</span>
+                            <button type="button" onClick={() => removeDocumentTag(i)} className="ml-1 rounded-full p-0.5 hover:bg-destructive hover:text-white transition-colors">
+                              <Trash2 className="h-3 w-3" />
                             </button>
                           </Badge>
                         ))}
@@ -805,75 +852,77 @@ const DashboardPage = () => {
                     </div>
                   )}
 
-                  <div className="space-y-2 rounded-xl border border-border/60 p-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="password-protect"
-                        checked={passwordProtect}
-                        onCheckedChange={(checked) => {
-                          if (!isPro) { setUpgradeModalOpen(true); return; }
-                          setPasswordProtect(!!checked);
-                        }}
-                      />
-                      <Label htmlFor="password-protect" className="text-sm flex items-center gap-1.5 cursor-pointer">
-                        <LockIcon className="h-3.5 w-3.5" /> Proteger link com senha
-                        {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
-                      </Label>
-                    </div>
-                    {passwordProtect && isPro && (
-                      <Input
-                        type="text"
-                        placeholder="Defina uma senha simples..."
-                        value={accessPassword}
-                        onChange={(e) => setAccessPassword(e.target.value)}
-                        className="rounded-xl mt-2"
-                      />
-                    )}
-                  </div>
-
-                  <div className="space-y-2 rounded-xl border border-border/60 p-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="link-expiration"
-                        checked={linkExpiration}
-                        onCheckedChange={(checked) => {
-                          if (!isPro) { setUpgradeModalOpen(true); return; }
-                          setLinkExpiration(!!checked);
-                        }}
-                      />
-                      <Label htmlFor="link-expiration" className="text-sm flex items-center gap-1.5 cursor-pointer">
-                        <Clock className="h-3.5 w-3.5" /> Expirar link após X dias
-                        {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
-                      </Label>
-                    </div>
-                    {linkExpiration && isPro && (
-                      <div className="flex items-center gap-2 mt-2">
-                        <Input
-                          type="number"
-                          min={1}
-                          max={365}
-                          value={expirationDays}
-                          onChange={(e) => setExpirationDays(Number(e.target.value))}
-                          className="rounded-xl w-20"
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+                    <div className="space-y-2 rounded-xl border border-border/60 p-3 bg-card">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="password-protect"
+                          checked={passwordProtect}
+                          onCheckedChange={(checked) => {
+                            if (!isPro) { setUpgradeModalOpen(true); return; }
+                            setPasswordProtect(!!checked);
+                          }}
                         />
-                        <span className="text-sm text-muted-foreground">dias</span>
+                        <Label htmlFor="password-protect" className="text-sm flex items-center gap-1.5 cursor-pointer">
+                          <LockIcon className="h-3.5 w-3.5" /> Proteger com senha
+                          {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
+                        </Label>
                       </div>
-                    )}
+                      {passwordProtect && isPro && (
+                        <Input
+                          type="text"
+                          placeholder="Digite uma senha..."
+                          value={accessPassword}
+                          onChange={(e) => setAccessPassword(e.target.value)}
+                          className="rounded-xl mt-2 h-9 text-sm"
+                        />
+                      )}
+                    </div>
+
+                    <div className="space-y-2 rounded-xl border border-border/60 p-3 bg-card">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="link-expiration"
+                          checked={linkExpiration}
+                          onCheckedChange={(checked) => {
+                            if (!isPro) { setUpgradeModalOpen(true); return; }
+                            setLinkExpiration(!!checked);
+                          }}
+                        />
+                        <Label htmlFor="link-expiration" className="text-sm flex items-center gap-1.5 cursor-pointer">
+                          <Clock className="h-3.5 w-3.5" /> Expirar link em
+                          {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
+                        </Label>
+                      </div>
+                      {linkExpiration && isPro && (
+                        <div className="flex items-center gap-2 mt-2">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={365}
+                            value={expirationDays}
+                            onChange={(e) => setExpirationDays(Number(e.target.value))}
+                            className="rounded-xl w-20 h-9 text-sm"
+                          />
+                          <span className="text-sm text-muted-foreground">dias</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {!isPro && (
-                    <p className="text-xs text-muted-foreground bg-accent/50 rounded-xl p-3">
+                    <p className="text-xs text-muted-foreground bg-accent/50 rounded-xl p-3 text-center">
                       📊 Plano Free: {activeRequestCount}/{maxRequests} solicitações ativas
                     </p>
                   )}
                 </div>
-                <DialogFooter className="mt-4">
+                <DialogFooter className="mt-4 pt-4 border-t border-border/40">
                   <Button
                     onClick={() => createRequest.mutate()}
                     disabled={createRequest.isPending || checklistItems.length === 0}
-                    className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                    className="w-full rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300 h-11 text-base"
                   >
-                    {createRequest.isPending ? "Criando..." : "Criar Solicitação ✨"}
+                    {createRequest.isPending ? "Criando..." : "Gerar Link de Upload ✨"}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -1012,7 +1061,6 @@ const DashboardPage = () => {
                 onDownloadZip={handleDownloadZip}
                 onUpgradeModal={() => setUpgradeModalOpen(true)}
                 formatDate={formatDate}
-                // Adicionando a prop para o kanban suportar a lixeira (se já não tiver, funcionará de forma segura)
                 onManageRequest={(id: string, name: string) => {
                   setSelectedRequest({ id, clientName: name });
                   setManageRequestOpen(true);
