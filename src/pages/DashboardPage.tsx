@@ -33,8 +33,8 @@ import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 import KanbanView from "@/components/dashboard/KanbanView";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-// ─── Pre-defined document tags ───
-const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
+// ─── Documentos e Templates Padrão ───
+const COMMON_DOCUMENTS = [
   { label: "RG / CNH", stage: "Documentos Pessoais" },
   { label: "CPF", stage: "Documentos Pessoais" },
   { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
@@ -43,11 +43,9 @@ const COMMON_DOCUMENTS: { label: string; stage: string }[] = [
   { label: "Extrato Bancário", stage: "Documentos Financeiros" },
   { label: "Holerite / Contracheque", stage: "Documentos Financeiros" },
   { label: "Declaração de IR", stage: "Documentos Financeiros" },
-  { label: "Certidão de Casamento", stage: "Documentos Pessoais" },
-  { label: "Certidão de Nascimento", stage: "Documentos Pessoais" },
 ];
 
-const TEMPLATES: { name: string; emoji: string; items: { label: string; stage: string }[] }[] = [
+const TEMPLATES = [
   {
     name: "Kit Admissão",
     emoji: "📋",
@@ -63,7 +61,6 @@ const TEMPLATES: { name: string; emoji: string; items: { label: string; stage: s
     items: [
       { label: "RG / CNH", stage: "Documentos Pessoais" },
       { label: "CPF", stage: "Documentos Pessoais" },
-      { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
       { label: "Contrato Social", stage: "Documentos Empresariais" },
       { label: "Cartão CNPJ", stage: "Documentos Empresariais" },
     ],
@@ -83,16 +80,21 @@ const DashboardPage = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
 
-  // View mode & Filters
+  // UI States
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
   const [showArchived, setShowArchived] = useState(false);
-
-  // Manage Request Dialog (Archive/Delete)
   const [manageRequestOpen, setManageRequestOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<{id: string, clientName: string} | null>(null);
-
-  // New request dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
+  const [previewFile, setPreviewFile] = useState<any>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
+
+  // Form States
   const [clientName, setClientName] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
@@ -104,24 +106,7 @@ const DashboardPage = () => {
   const [linkExpiration, setLinkExpiration] = useState(false);
   const [expirationDays, setExpirationDays] = useState(7);
 
-  // Pro upgrade modal
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-
-  // Cloud sync modal (OwnCloud)
-  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
-
-  // File preview modal
-  const [previewFile, setPreviewFile] = useState<any>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  // Files tab filter + search
-  const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
-  const [searchQuery, setSearchQuery] = useState("");
-
-  // Audit log panel
-  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
-
-  // Branding & Settings
+  // Branding & Config
   const [brandColor, setBrandColor] = useState("#7c3aed");
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
@@ -129,42 +114,32 @@ const DashboardPage = () => {
   const [logoUploading, setLogoUploading] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [slugValue, setSlugValue] = useState("");
-
-  // OwnCloud config
   const [owncloudUrl, setOwncloudUrl] = useState("");
   const [owncloudUser, setOwncloudUser] = useState("");
   const [owncloudToken, setOwncloudToken] = useState("");
 
-  // Auth check
-  const { data: session } = useQuery({
-    queryKey: ["session"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getSession();
-      return data.session;
-    },
-  });
-
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) navigate("/auth/login");
-    });
-    return () => subscription.unsubscribe();
-  }, [navigate]);
-
-  // Fetch company
+  // 1. Fetch Company & Plan
   const { data: company, isLoading: companyLoading } = useQuery({
     queryKey: ["company", slug],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("companies")
-        .select("*")
-        .eq("slug", slug)
-        .single();
+      const { data, error } = await supabase.from("companies").select("*").eq("slug", slug).single();
       if (error) throw error;
       return data;
     },
     enabled: !!slug,
   });
+
+  const { data: plan } = useQuery({
+    queryKey: ["plan", company?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("user_plans").select("*").eq("company_id", company!.id).single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!company?.id,
+  });
+
+  const isPro = plan?.plan === "pro";
 
   useEffect(() => {
     if (company) {
@@ -180,24 +155,7 @@ const DashboardPage = () => {
     }
   }, [company]);
 
-  // Fetch plan
-  const { data: plan } = useQuery({
-    queryKey: ["plan", company?.id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("user_plans")
-        .select("*")
-        .eq("company_id", company!.id)
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!company?.id,
-  });
-
-  const isPro = plan?.plan === "pro";
-
-  // Fetch requests with items
+  // 2. Fetch Requests & Uploads
   const { data: requests, isLoading: requestsLoading } = useQuery({
     queryKey: ["requests", company?.id],
     queryFn: async () => {
@@ -212,11 +170,6 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
-  const visibleRequests = requests?.filter((r: any) => 
-    showArchived ? r.status === "archived" : r.status !== "archived"
-  ) ?? [];
-
-  // Fetch uploads
   const { data: uploads, isLoading: uploadsLoading } = useQuery({
     queryKey: ["uploads", company?.id],
     queryFn: async () => {
@@ -225,441 +178,123 @@ const DashboardPage = () => {
         .select("*, request_items!inner(item_name, stage_name, request_id, document_requests:request_id(client_name))")
         .eq("company_id", company!.id)
         .order("created_at", { ascending: false });
-      if (error) {
-        const { data: fallback } = await supabase
-          .from("uploads")
-          .select("*")
-          .eq("company_id", company!.id)
-          .order("created_at", { ascending: false });
-        return fallback ?? [];
-      }
-      return data;
+      return data ?? [];
     },
     enabled: !!company?.id,
   });
 
-  // Buscar templates customizados (PRO)
   const { data: customTemplates } = useQuery({
     queryKey: ["my-custom-templates", company?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("templates")
-        .select("*, template_items(*)")
-        .eq("company_id", company!.id)
-        .order("created_at", { ascending: false });
+      const { data, error } = await supabase.from("templates").select("*, template_items(*)").eq("company_id", company!.id);
       if (error) throw error;
       return data;
     },
     enabled: !!company?.id && isPro,
   });
 
-  // ─── RAIO-X: Normalização e Lógica Anti-Duplicidade ───
+  // 3. Logic & Deduplication (Raio-X)
   const normalizeForCheck = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/gi, '');
 
-  const isDuplicate = (newItemName: string) => {
-    const normalizedNew = normalizeForCheck(newItemName);
-    return checklistItems.some(item => normalizeForCheck(item.itemName) === normalizedNew);
-  };
-
   const allAvailableItems = useMemo(() => {
-    const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
-
-    const addItem = (stage: string, name: string, type: "file" | "text") => {
+    const itemsMap = new Map();
+    const addItem = (stage: string, name: string, type: string) => {
       const key = normalizeForCheck(name);
-      if (!itemsMap.has(key)) {
-        itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
-      }
+      if (!itemsMap.has(key)) itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
     };
-
     COMMON_DOCUMENTS.forEach(doc => addItem(doc.stage, doc.label, "file"));
     TEMPLATES.forEach(tpl => tpl.items.forEach(item => addItem(item.stage, item.label, "file")));
-
     if (customTemplates) {
-      customTemplates.forEach((tpl: any) => {
-        tpl.template_items?.forEach((tItem: any) => {
-          addItem(tItem.stage_name, tItem.item_name, tItem.item_type || "file");
-        });
-      });
+      customTemplates.forEach((tpl: any) => tpl.template_items?.forEach((ti: any) => addItem(ti.stage_name, ti.item_name, ti.item_type || "file")));
     }
-
-    return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
+    return Array.from(itemsMap.values()).sort((a: any, b: any) => a.itemName.localeCompare(b.itemName));
   }, [customTemplates]);
 
-  // Realtime
+  // 4. Realtime Updates
   useEffect(() => {
     if (!company?.id) return;
-
-    const channel = supabase
-      .channel(`dashboard-${company.id}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
-          queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "request_items" },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
-          queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
-        }
-      )
+    const channel = supabase.channel(`db-changes-${company.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ["uploads", company.id] });
+        queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "request_items" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["requests", company.id] });
+      })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [company?.id, queryClient]);
 
-  // ─── Funções de manipulação do checklist ───
+  // 5. Handlers
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
-    if (isDuplicate(label)) {
-      toast.warning(`O item "${label}" já está na lista!`);
+    const key = normalizeForCheck(label);
+    if (checklistItems.some(i => normalizeForCheck(i.itemName) === key)) {
+      toast.warning("Este item já está na lista!");
       return;
     }
     setChecklistItems([...checklistItems, { stageName: stage, itemName: label.trim(), itemType: type }]);
   };
 
-  const removeDocumentTag = (index: number) => {
-    setChecklistItems(checklistItems.filter((_, i) => i !== index));
-  };
-
   const addCustomItem = () => {
-    const name = customItemName.trim();
-    const stage = customItemStage.trim() || "Geral";
-    
-    if (!name) return;
-    if (isDuplicate(name)) {
-      toast.warning(`O documento "${name}" já foi adicionado!`);
-      return;
-    }
-    
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
+    if (!customItemName.trim()) return;
+    addDocumentTag(customItemName, customItemStage || "Geral", customItemType);
     setCustomItemName("");
   };
 
-  const applyTemplate = (template: typeof TEMPLATES[number]) => {
+  const applyTemplate = (template: any) => {
     const merged = [...checklistItems];
-    let addedCount = 0;
-
-    template.items.forEach((t) => {
-      if (!merged.some((m) => normalizeForCheck(m.itemName) === normalizeForCheck(t.label))) {
-        merged.push({ stageName: t.stage, itemName: t.label.trim(), itemType: "file" });
-        addedCount++;
+    template.items.forEach((t: any) => {
+      const key = normalizeForCheck(t.label || t.item_name);
+      if (!merged.some(m => normalizeForCheck(m.itemName) === key)) {
+        merged.push({ stageName: t.stage || t.stage_name, itemName: (t.label || t.item_name).trim(), itemType: t.item_type || "file" });
       }
     });
-
     setChecklistItems(merged);
-    if (addedCount > 0) toast.success(`Template "${template.name}" aplicado 🎉`);
-    else toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
+    toast.success("Template aplicado!");
   };
 
-  const applyCustomTemplate = (template: any) => {
-    const merged = [...checklistItems];
-    let addedCount = 0;
-
-    template.template_items.forEach((t: any) => {
-      if (!merged.some((m) => normalizeForCheck(m.itemName) === normalizeForCheck(t.item_name))) {
-        merged.push({ 
-          stageName: t.stage_name, 
-          itemName: t.item_name.trim(), 
-          itemType: t.item_type || "file" 
-        });
-        addedCount++;
-      }
-    });
-
-    setChecklistItems(merged);
-    if (addedCount > 0) toast.success(`Template "${template.name}" aplicado 🎉`);
-    else toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
-  };
-
-  const activeRequestCount = requests?.filter((r: any) => r.status !== "completed" && r.status !== "archived").length ?? 0;
-  const maxRequests = plan?.max_active_requests ?? 5;
-
-  // Create request mutation
   const createRequest = useMutation({
     mutationFn: async () => {
-      if (!company) throw new Error("No company");
-      if (!clientName.trim() || checklistItems.length === 0) throw new Error("Preencha o nome e adicione pelo menos um documento");
-      if (!isPro && activeRequestCount >= maxRequests) {
-        throw new Error(`Limite de ${maxRequests} solicitações ativas atingido. Faça upgrade para Pro! ✨`);
-      }
-
-      const insertData: any = {
-        company_id: company.id,
-        client_name: clientName,
-        client_email: clientEmail || null,
-      };
-
-      if (isPro && passwordProtect && accessPassword.trim()) {
-        insertData.access_password = accessPassword.trim();
-      }
-
-      if (isPro && linkExpiration && expirationDays > 0) {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + expirationDays);
-        insertData.expires_at = expiresAt.toISOString();
-      }
-
-      const { data: req, error: reqError } = await supabase
-        .from("document_requests")
-        .insert(insertData)
-        .select()
-        .single();
-      if (reqError) throw reqError;
-
-      const items = checklistItems.map((item, i) => ({
-        request_id: req.id,
-        stage_name: item.stageName,
-        item_name: item.itemName,
-        sort_order: i,
-        item_type: item.itemType,
-      }));
-      const { error: itemsError } = await supabase.from("request_items").insert(items);
-      if (itemsError) throw itemsError;
+      if (!company || !clientName.trim() || checklistItems.length === 0) throw new Error("Dados incompletos");
+      const { data: req, error: reqErr } = await supabase.from("document_requests").insert({
+        company_id: company.id, client_name: clientName, client_email: clientEmail || null,
+        access_password: isPro && passwordProtect ? accessPassword : null,
+        expires_at: isPro && linkExpiration ? new Date(Date.now() + expirationDays * 86400000).toISOString() : null
+      }).select().single();
+      if (reqErr) throw reqErr;
+      const items = checklistItems.map((it, i) => ({ request_id: req.id, stage_name: it.stageName, item_name: it.itemName, sort_order: i, item_type: it.itemType }));
+      await supabase.from("request_items").insert(items);
       return req;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["requests"] });
       setDialogOpen(false);
       setClientName("");
-      setClientEmail("");
       setChecklistItems([]);
-      setPasswordProtect(false);
-      setAccessPassword("");
-      setLinkExpiration(false);
-      setExpirationDays(7);
-      toast.success("Solicitação criada com sucesso! 🎉");
-    },
-    onError: (err: any) => {
-      if (err.message.includes("Limite")) setUpgradeModalOpen(true);
-      toast.error("Erro ao criar solicitação", { description: err.message });
-    },
+      toast.success("Solicitação criada! 🚀");
+    }
   });
 
-  const archiveRequest = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("document_requests").update({ status: "archived" }).eq("id", id);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["requests"] });
-      setManageRequestOpen(false);
-      toast.success("Solicitação engavetada! 📦");
-    },
-    onError: (err: any) => toast.error("Erro ao engavetar", { description: err.message })
-  });
-
-  const deleteRequest = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("document_requests").delete().eq("id", id);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["requests"] });
-      setManageRequestOpen(false);
-      toast.success("Solicitação excluída permanentemente! 🗑️");
-    },
-    onError: (err: any) => toast.error("Erro ao excluir", { description: err.message })
-  });
-
-  const updateSettings = useMutation({
-    mutationFn: async () => {
-      if (!company) return;
-      const updateData: any = {
-        display_name: displayName,
-        slug: slugValue,
-        primary_color: brandColor,
-        logo_url: logoUrl || null,
-        cnpj: cnpj || null,
-        phone: phone || null,
-      };
-      if (isPro) {
-        updateData.owncloud_url = owncloudUrl || null;
-        updateData.owncloud_user = owncloudUser || null;
-        updateData.owncloud_token = owncloudToken || null;
-      }
-      const { error } = await supabase
-        .from("companies")
-        .update(updateData)
-        .eq("id", company.id);
-      if (error) throw error;
-      if (slugValue !== slug) navigate(`/${slugValue}/dashboard`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["company"] });
-      toast.success("Configurações salvas! ✅");
-    },
-  });
-
-  const handleCopy = (requestId: string) => {
-    const link = `${window.location.origin}/${slug}/enviar/${requestId}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(requestId);
-    toast.success("Link copiado! 📋");
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleMagicReminder = (req: any) => {
-    if (!isPro) {
-      setUpgradeModalOpen(true);
-      return;
-    }
-
-    const allItems = (req.request_items ?? []) as any[];
-    const requestUploads = (uploads ?? []).filter((u: any) =>
-      allItems.some((item: any) => item.id === u.request_item_id)
-    );
-
-    const pendingItems = allItems.filter((item: any) => {
-      if (item.item_type === "text" && item.is_completed) return false;
-      const itemUploads = requestUploads.filter((u: any) => u.request_item_id === item.id);
-      if (itemUploads.length === 0 && item.item_type !== "text") return true;
-      if (item.item_type === "text" && !item.is_completed) return true;
-      
-      const latestUpload = itemUploads.sort((a: any, b: any) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )[0];
-      return latestUpload?.status === "rejected";
-    });
-
-    if (pendingItems.length === 0) {
-      toast.info("Todos os documentos já foram enviados! 🎉");
-      return;
-    }
-
-    const rejectedItems = pendingItems.filter((item: any) => {
-      const latestUpload = requestUploads
-        .filter((u: any) => u.request_item_id === item.id)
-        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-      return latestUpload?.status === "rejected";
-    });
-
-    const notSentItems = pendingItems.filter((item: any) => !rejectedItems.includes(item));
-
-    let docList = "";
-    if (notSentItems.length > 0) {
-      docList += notSentItems.map((item: any) => `📎 ${item.item_name}`).join("\n");
-    }
-    if (rejectedItems.length > 0) {
-      if (docList) docList += "\n\n";
-      docList += "⚠️ *Documentos que precisam ser reenviados:*\n";
-      docList += rejectedItems.map((item: any) => {
-        const latestUpload = requestUploads
-          .filter((u: any) => u.request_item_id === item.id)
-          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-        const reason = latestUpload?.rejection_reason ? ` (Motivo: ${latestUpload.rejection_reason})` : "";
-        return `🔄 ${item.item_name}${reason}`;
-      }).join("\n");
-    }
-
-    const link = `${window.location.origin}/${slug}/enviar/${req.id}`;
-    const message = `Olá, ${req.client_name}! 👋\n\nPassando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\n📲 Acesse seu link seguro para enviar:\n${link}\n\nQualquer dúvida, estou à disposição!`;
-    const encoded = encodeURIComponent(message);
-
-    const rawContact = (req.client_email ?? "").trim();
-    const digitsOnly = rawContact.replace(/\D/g, "");
-    const isPhone = digitsOnly.length >= 10 && !rawContact.includes("@");
-    const waUrl = isPhone
-      ? `https://wa.me/${digitsOnly}?text=${encoded}`
-      : `https://wa.me/?text=${encoded}`;
-
-    window.open(waUrl, "_blank");
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/");
-  };
-
-  const handleDownloadZip = useCallback(async (requestId: string, clientNameArg: string) => {
+  const handleDownloadZip = useCallback(async (requestId: string, name: string) => {
     setDownloadingZipId(requestId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error("Sessão expirada. Faça login novamente.");
-        return;
-      }
-
-      toast.info("Gerando ZIP... aguarde ⏳");
-      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
-      const functionUrl = `https://${projectId}.supabase.co/functions/v1/download-zip`;
-
-      const response = await fetch(functionUrl, {
+      const res = await fetch(`https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.supabase.co/functions/v1/download-zip`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-        },
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session?.access_token}`, "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
         body: JSON.stringify({ requestId }),
       });
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        let errorMsg = "Erro ao gerar ZIP";
-        try {
-          const parsed = JSON.parse(errorBody);
-          errorMsg = parsed.error || errorMsg;
-        } catch { /* not JSON */ }
-        toast.error(errorMsg);
-        return;
-      }
-
-      const blob = await response.blob();
-      if (blob.size === 0) {
-        toast.error("ZIP vazio — nenhum arquivo aprovado encontrado");
-        return;
-      }
-
+      if (!res.ok) throw new Error("Erro ao gerar ZIP");
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${clientNameArg} - Aprovados.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const a = document.createElement("a"); a.href = url; a.download = `${name} - Documentos.zip`; a.click();
       toast.success("Download concluído! 📦");
-    } catch (err: any) {
-      toast.error("Erro ao baixar ZIP", { description: err.message });
-    } finally {
-      setDownloadingZipId(null);
-    }
+    } catch (err: any) { toast.error(err.message); } finally { setDownloadingZipId(null); }
   }, []);
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
-
-  const filteredUploads = uploads?.filter((file: any) => {
-    const matchesFilter = fileFilter === "all" || file.status === fileFilter;
-    const query = searchQuery.toLowerCase();
-    const matchesSearch = !query ||
-      file.file_name?.toLowerCase().includes(query) ||
-      file.request_items?.document_requests?.client_name?.toLowerCase().includes(query) ||
-      file.request_items?.item_name?.toLowerCase().includes(query);
-    return matchesFilter && matchesSearch;
-  }) ?? [];
-
-  const uploadsByClient = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
-    const clientName = file.request_items?.document_requests?.client_name ?? "Sem cliente";
-    if (!acc[clientName]) acc[clientName] = [];
-    acc[clientName].push(file);
-    return acc;
-  }, {});
-
-  const pendingCount = uploads?.filter((f: any) => f.status === "pending").length ?? 0;
-  const approvedCount = uploads?.filter((f: any) => f.status === "approved").length ?? 0;
-  const rejectedCount = uploads?.filter((f: any) => f.status === "rejected").length ?? 0;
+  const formatSize = (b: number) => b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+  
+  const visibleRequests = requests?.filter((r: any) => showArchived ? r.status === "archived" : r.status !== "archived") ?? [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -670,831 +305,136 @@ const DashboardPage = () => {
               <Shield className="h-4 w-4 text-primary-foreground" />
             </div>
             <span className="text-sm font-bold text-foreground">Seguríssimo</span>
-            {isPro && (
-              <Badge variant="outline" className="text-xs border-pro/40 text-pro">
-                <Crown className="mr-1 h-3 w-3" /> Pro
-              </Badge>
-            )}
+            {isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground transition-colors" onClick={handleLogout}>
-              <LogOut className="mr-2 h-4 w-4" /> Sair
-            </Button>
+            <Button variant="ghost" size="sm" onClick={() => supabase.auth.signOut().then(() => navigate("/"))}><LogOut className="mr-2 h-4 w-4" /> Sair</Button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-8">
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between"
-        >
-          <div>
-            {companyLoading ? (
-              <Skeleton className="h-8 w-48" />
-            ) : (
-              <>
-                <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-                <p className="text-sm text-muted-foreground">
-                  Gerencie suas solicitações · {!isPro && <span className="text-primary cursor-pointer hover:underline" onClick={() => setUpgradeModalOpen(true)}>Upgrade para Pro ✨</span>}
-                </p>
-              </>
-            )}
-          </div>
+        <div className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
           <div className="flex gap-2 flex-wrap">
-            <Button
-              variant="outline"
-              className="rounded-xl transition-all duration-200"
-              onClick={() => navigate(`/${slug}/templates`)}
-            >
-              <LayoutList className="mr-1.5 h-4 w-4" />
-              Templates
-              {!isPro && <LockIcon className="ml-1.5 h-3 w-3 text-muted-foreground" />}
+            <Button variant="outline" className="rounded-xl" onClick={() => navigate(`/${slug}/templates`)}>
+              <LayoutList className="mr-1.5 h-4 w-4" /> Templates
             </Button>
-
-            {/* CONDICIONAL OWNCLOUD APLICADA: Só aparece se for PRO E tiver configurado a URL */}
+            
+            {/* CONDICIONAL OWNCLOUD: Só aparece se estiver configurado */}
             {isPro && owncloudUrl && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="rounded-xl transition-all duration-200"
-                onClick={() => setCloudSyncModalOpen(true)}
-              >
-                <Cloud className="mr-1.5 h-3 w-3" />
-                ownCloud
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setCloudSyncModalOpen(true)}>
+                <Cloud className="mr-1.5 h-3 w-3" /> ownCloud
               </Button>
             )}
 
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                  <Plus className="mr-2 h-4 w-4" /> Criar Solicitação
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto rounded-3xl">
-                <DialogHeader>
-                  <DialogTitle>Nova Solicitação 📄</DialogTitle>
-                </DialogHeader>
+              <DialogTrigger asChild><Button className="rounded-xl gradient-primary shadow-hero"><Plus className="mr-2 h-4 w-4" /> Criar Solicitação</Button></DialogTrigger>
+              <DialogContent className="max-w-xl rounded-3xl">
+                <DialogHeader><DialogTitle>Nova Solicitação 📄</DialogTitle></DialogHeader>
                 <div className="space-y-5 mt-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Nome do Cliente</Label>
-                      <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Ex: João Silva" className="rounded-xl" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>E-mail / WhatsApp (opcional)</Label>
-                      <Input value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="cliente@email.com" type="text" className="rounded-xl" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <Input value={clientName} onChange={e => setClientName(e.target.value)} placeholder="Nome do Cliente" className="rounded-xl" />
+                    <Input value={clientEmail} onChange={e => setClientEmail(e.target.value)} placeholder="E-mail/WhatsApp" className="rounded-xl" />
+                  </div>
+                  <div className="space-y-2 bg-accent/30 p-4 rounded-2xl border">
+                    <Label className="text-xs">Aplicar Templates</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {TEMPLATES.map(tpl => <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} className="rounded-xl bg-background">{tpl.emoji} {tpl.name}</Button>)}
                     </div>
                   </div>
-
-                  <div className="space-y-2 bg-accent/30 p-4 rounded-2xl border border-border/40">
-                    <Label className="flex items-center gap-1.5"><Tag className="h-3.5 w-3.5 text-primary" /> Aplicar Templates Inteiros</Label>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {TEMPLATES.map((tpl) => (
-                        <Button key={tpl.name} variant="outline" size="sm" onClick={() => applyTemplate(tpl)} type="button" className="rounded-xl hover:bg-accent hover:text-accent-foreground transition-all duration-200 bg-background">
-                          {tpl.emoji} {tpl.name}
-                        </Button>
-                      ))}
-                    </div>
-
-                    {isPro && customTemplates && customTemplates.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-border/50">
-                        <Label className="flex items-center gap-1.5 mb-2"><Crown className="h-3.5 w-3.5 text-pro" /> Meus Templates</Label>
-                        <div className="flex flex-wrap gap-2">
-                          {customTemplates.map((tpl: any) => (
-                            <Button key={tpl.id} variant="outline" size="sm" onClick={() => applyCustomTemplate(tpl)} type="button" className="rounded-xl border-pro/30 hover:bg-pro/10 hover:text-pro transition-all duration-200 bg-background">
-                              <FileText className="mr-1.5 h-3.5 w-3.5" /> {tpl.name}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
                   <div className="space-y-4 pt-2">
-                    <Label className="text-base">Adicionar Itens Individuais</Label>
-                    
-                    <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">Puxar de um template existente:</Label>
-                      <Select onValueChange={(val) => {
-                          const selected = allAvailableItems.find(i => i.itemName === val);
-                          if (selected) {
-                            addDocumentTag(selected.itemName, selected.stageName, selected.itemType);
-                          }
-                        }}>
-                        <SelectTrigger className="w-full rounded-xl bg-accent/20">
-                          <SelectValue placeholder="Selecione um item salvo nos seus templates..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allAvailableItems.map((item, idx) => (
-                            <SelectItem key={idx} value={item.itemName}>
-                              {item.itemType === "text" ? "📝" : "📎"} {item.itemName} <span className="text-muted-foreground ml-1">({item.stageName})</span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="flex items-center gap-2 py-1">
-                      <div className="h-px flex-1 bg-border/60" />
-                      <span className="text-[10px] text-muted-foreground font-semibold tracking-wider uppercase">OU CRIE UM NOVO AGORA</span>
-                      <div className="h-px flex-1 bg-border/60" />
-                    </div>
-
+                    <Label className="text-xs">Itens Individuais</Label>
+                    <Select onValueChange={val => { const s = allAvailableItems.find(i => i.itemName === val); if (s) addDocumentTag(s.itemName, s.stageName, s.itemType); }}>
+                      <SelectTrigger className="rounded-xl bg-accent/20"><SelectValue placeholder="Puxar item existente..." /></SelectTrigger>
+                      <SelectContent>{allAvailableItems.map((it, idx) => <SelectItem key={idx} value={it.itemName}>{it.itemType === "text" ? "📝" : "📎"} {it.itemName}</SelectItem>)}</SelectContent>
+                    </Select>
                     <div className="flex gap-2">
-                      <Input
-                        placeholder="Categoria (ex: Sócios)"
-                        value={customItemStage}
-                        onChange={(e) => setCustomItemStage(e.target.value)}
-                        className="rounded-xl w-[140px] shrink-0"
-                      />
-                      <Input
-                        placeholder={customItemType === "text" ? "Ex: Qual seu CPF?" : "Nome do documento..."}
-                        value={customItemName}
-                        onChange={(e) => setCustomItemName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
-                        className="rounded-xl flex-1"
-                      />
-                      <Button
-                        variant={customItemType === "text" ? "default" : "outline"}
-                        size="icon"
-                        onClick={() => setCustomItemType(customItemType === "file" ? "text" : "file")}
-                        type="button"
-                        className="rounded-xl shrink-0"
-                        title={customItemType === "text" ? "Campo de texto" : "Upload de arquivo"}
-                      >
-                        {customItemType === "text" ? <Type className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-                      </Button>
-                      <Button variant="outline" size="icon" onClick={addCustomItem} type="button" className="rounded-xl shrink-0">
-                        <Plus className="h-4 w-4" />
-                      </Button>
+                      <Input placeholder="Categoria" value={customItemStage} onChange={e => setCustomItemStage(e.target.value)} className="rounded-xl w-32" />
+                      <Input placeholder="Nome do item..." value={customItemName} onChange={e => setCustomItemName(e.target.value)} className="rounded-xl flex-1" />
+                      <Button variant="outline" size="icon" onClick={addCustomItem} className="rounded-xl"><Plus className="h-4 w-4" /></Button>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      {customItemType === "text" ? "📝 Campo de texto — o cliente digitará a resposta" : "📎 Upload de arquivo — o cliente enviará um documento"}
-                    </p>
                   </div>
-
                   {checklistItems.length > 0 && (
-                    <div className="space-y-3 bg-accent/20 p-4 rounded-2xl border border-border/40 mt-4">
-                      <Label>Seu Checklist Final ({checklistItems.length} itens)</Label>
-                      <div className="flex flex-wrap gap-2">
-                        {checklistItems.map((item, i) => (
-                          <Badge key={i} variant="secondary" className="gap-1 pr-1.5 py-1 rounded-full text-xs font-medium bg-background border border-border/50">
-                            {item.itemType === "text" ? "📝" : "📎"} {item.itemName}
-                            <span className="text-[10px] text-muted-foreground ml-1">({item.stageName})</span>
-                            <button type="button" onClick={() => removeDocumentTag(i)} className="ml-1 rounded-full p-0.5 hover:bg-destructive hover:text-white transition-colors">
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
-                      </div>
+                    <div className="flex flex-wrap gap-2 p-3 bg-accent/20 rounded-xl border border-dashed">
+                      {checklistItems.map((it, i) => <Badge key={i} variant="secondary" className="rounded-full pr-1">{it.itemName} <button onClick={() => setChecklistItems(checklistItems.filter((_, idx) => idx !== i))} className="ml-1 hover:text-destructive"><Trash2 className="h-3 w-3" /></button></Badge>)}
                     </div>
-                  )}
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-                    <div className="space-y-2 rounded-xl border border-border/60 p-3 bg-card">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="password-protect"
-                          checked={passwordProtect}
-                          onCheckedChange={(checked) => {
-                            if (!isPro) { setUpgradeModalOpen(true); return; }
-                            setPasswordProtect(!!checked);
-                          }}
-                        />
-                        <Label htmlFor="password-protect" className="text-sm flex items-center gap-1.5 cursor-pointer">
-                          <LockIcon className="h-3.5 w-3.5" /> Proteger com senha
-                          {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
-                        </Label>
-                      </div>
-                      {passwordProtect && isPro && (
-                        <Input
-                          type="text"
-                          placeholder="Digite uma senha..."
-                          value={accessPassword}
-                          onChange={(e) => setAccessPassword(e.target.value)}
-                          className="rounded-xl mt-2 h-9 text-sm"
-                        />
-                      )}
-                    </div>
-
-                    <div className="space-y-2 rounded-xl border border-border/60 p-3 bg-card">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id="link-expiration"
-                          checked={linkExpiration}
-                          onCheckedChange={(checked) => {
-                            if (!isPro) { setUpgradeModalOpen(true); return; }
-                            setLinkExpiration(!!checked);
-                          }}
-                        />
-                        <Label htmlFor="link-expiration" className="text-sm flex items-center gap-1.5 cursor-pointer">
-                          <Clock className="h-3.5 w-3.5" /> Expirar link em
-                          {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-1"><Crown className="mr-0.5 h-2.5 w-2.5" /> Pro</Badge>}
-                        </Label>
-                      </div>
-                      {linkExpiration && isPro && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <Input
-                            type="number"
-                            min={1}
-                            max={365}
-                            value={expirationDays}
-                            onChange={(e) => setExpirationDays(Number(e.target.value))}
-                            className="rounded-xl w-20 h-9 text-sm"
-                          />
-                          <span className="text-sm text-muted-foreground">dias</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {!isPro && (
-                    <p className="text-xs text-muted-foreground bg-accent/50 rounded-xl p-3 text-center">
-                      📊 Plano Free: {activeRequestCount}/{maxRequests} solicitações ativas
-                    </p>
                   )}
                 </div>
-                <DialogFooter className="mt-4 pt-4 border-t border-border/40">
-                  <Button
-                    onClick={() => createRequest.mutate()}
-                    disabled={createRequest.isPending || checklistItems.length === 0}
-                    className="w-full rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300 h-11 text-base"
-                  >
-                    {createRequest.isPending ? "Criando..." : "Gerar Link de Upload ✨"}
-                  </Button>
-                </DialogFooter>
+                <DialogFooter className="mt-4"><Button onClick={() => createRequest.mutate()} className="w-full rounded-xl gradient-primary h-11">Gerar Link ✨</Button></DialogFooter>
               </DialogContent>
             </Dialog>
           </div>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"
-        >
-          {(() => {
-            const totalRequests = requests?.length ?? 0;
-            const totalUploads = uploads?.length ?? 0;
-            const approvedUploads = uploads?.filter((u: any) => u.status === "approved").length ?? 0;
-            const pendingUploads = uploads?.filter((u: any) => u.status === "pending").length ?? 0;
-            const completionRate = totalUploads > 0 ? Math.round((approvedUploads / totalUploads) * 100) : 0;
-
-            const stats = [
-              { label: "Solicitações", value: totalRequests, icon: LinkIcon, color: "text-primary", bg: "bg-primary/10" },
-              { label: "Pendentes", value: pendingUploads, icon: Clock, color: "text-amber-500", bg: "bg-amber-500/10" },
-              { label: "Aprovados", value: approvedUploads, icon: Check, color: "text-success", bg: "bg-success/10" },
-              { label: "Taxa de Aprovação", value: `${completionRate}%`, icon: Sparkles, color: "text-pro", bg: "bg-pro/10" },
-            ];
-
-            return stats.map((stat, i) => (
-              <div key={i} className="rounded-2xl border border-border/60 bg-card p-4 shadow-card hover:shadow-elevated transition-all duration-300">
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${stat.bg}`}>
-                    <stat.icon className={`h-5 w-5 ${stat.color}`} />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-foreground">{stat.value}</p>
-                    <p className="text-[11px] text-muted-foreground">{stat.label}</p>
-                  </div>
-                </div>
-              </div>
-            ));
-          })()}
-        </motion.div>
+        </div>
 
         <Tabs defaultValue="requests" className="w-full">
-          <TabsList className="mb-6 rounded-2xl">
-            <TabsTrigger value="requests" className="rounded-xl">
-              <LinkIcon className="mr-2 h-4 w-4" /> Solicitações
-            </TabsTrigger>
-            <TabsTrigger value="files" className="rounded-xl">
-              <FileText className="mr-2 h-4 w-4" /> Arquivos
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="rounded-xl">
-              <Settings className="mr-2 h-4 w-4" /> Configurações
-            </TabsTrigger>
-          </TabsList>
-
+          <TabsList className="mb-6 rounded-2xl"><TabsTrigger value="requests" className="rounded-xl">Solicitações</TabsTrigger><TabsTrigger value="files" className="rounded-xl">Arquivos</TabsTrigger><TabsTrigger value="settings" className="rounded-xl">Configurações</TabsTrigger></TabsList>
+          
           <TabsContent value="requests">
-            <div className="flex flex-wrap items-center gap-2 mb-4">
-              <Button
-                variant={viewMode === "list" ? "default" : "outline"}
-                size="sm"
-                className="rounded-xl"
-                onClick={() => setViewMode("list")}
-              >
-                <LayoutList className="mr-1.5 h-3.5 w-3.5" /> Lista
-              </Button>
-              <Button
-                variant={viewMode === "kanban" ? "default" : "outline"}
-                size="sm"
-                className="rounded-xl"
-                onClick={() => setViewMode("kanban")}
-              >
-                <Kanban className="mr-1.5 h-3.5 w-3.5" /> Kanban
-              </Button>
-
-              <Button
-                variant={showArchived ? "secondary" : "ghost"}
-                size="sm"
-                className="rounded-xl ml-auto text-muted-foreground"
-                onClick={() => setShowArchived(!showArchived)}
-              >
-                <Archive className="mr-1.5 h-3.5 w-3.5" /> 
-                {showArchived ? "Ocultar Engavetados" : "Ver Engavetados"}
-              </Button>
-            </div>
-
-            {requestsLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="rounded-2xl border border-border/60 bg-card p-5 shadow-card space-y-3 animate-pulse">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-2">
-                        <Skeleton className="h-5 w-32 rounded-lg" />
-                        <Skeleton className="h-3 w-20 rounded-lg" />
+             <div className="flex gap-2 mb-4">
+                <Button variant={viewMode === "list" ? "default" : "outline"} size="sm" onClick={() => setViewMode("list")} className="rounded-xl">Lista</Button>
+                <Button variant={viewMode === "kanban" ? "default" : "outline"} size="sm" onClick={() => setViewMode("kanban")} className="rounded-xl">Kanban</Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowArchived(!showArchived)} className="ml-auto rounded-xl">{showArchived ? "Ver Ativas" : "Ver Engavetadas"}</Button>
+             </div>
+             {requestsLoading ? <Skeleton className="h-40 w-full rounded-2xl" /> : visibleRequests.map((req: any) => (
+                <div key={req.id} className="mb-3 rounded-2xl border bg-card p-5 shadow-sm hover:shadow-md transition-all">
+                   <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="font-bold flex items-center gap-2">{req.client_name} {req.status === 'completed' && <CheckCircle2 className="h-4 w-4 text-success" />}</h3>
+                        <p className="text-xs text-muted-foreground">{new Date(req.created_at).toLocaleDateString()}</p>
                       </div>
-                      <Skeleton className="h-6 w-16 rounded-full" />
-                    </div>
-                    <div className="flex gap-2">
-                      <Skeleton className="h-6 w-20 rounded-full" />
-                      <Skeleton className="h-6 w-24 rounded-full" />
-                      <Skeleton className="h-6 w-16 rounded-full" />
-                    </div>
-                    <div className="flex gap-2">
-                      <Skeleton className="h-8 w-24 rounded-xl" />
-                      <Skeleton className="h-8 w-20 rounded-xl" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : visibleRequests.length === 0 ? (
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
-                <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/10">
-                  {showArchived ? <Archive className="h-10 w-10 text-primary/40" /> : <FileText className="h-10 w-10 text-primary/40" />}
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/${slug}/enviar/${req.id}`); toast.success("Link copiado!"); }} className="rounded-xl">Copiar Link</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleDownloadZip(req.id, req.client_name)} className="rounded-xl"><Archive className="h-4 w-4 mr-2" /> Baixar ZIP</Button>
+                        <Button variant="ghost" size="sm" onClick={() => { setSelectedRequest({ id: req.id, clientName: req.client_name }); setManageRequestOpen(true); }} className="rounded-xl text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4" /></Button>
+                      </div>
+                   </div>
+                   <div className="flex flex-wrap gap-1.5">
+                      {req.request_items?.map((it: any) => <Badge key={it.id} variant={it.is_completed ? "default" : "secondary"} className={`rounded-full text-[10px] ${it.is_completed ? 'bg-success/20 text-success border-success/30' : ''}`}>{it.item_name}</Badge>)}
+                   </div>
                 </div>
-                <p className="text-xl font-bold text-foreground mb-2">
-                  {showArchived ? "Nenhuma solicitação engavetada" : "Tudo limpo por aqui! 🎉"}
-                </p>
-                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                  {showArchived 
-                    ? "As solicitações que você arquivar aparecerão aqui." 
-                    : 'Nenhuma solicitação ativa. Clique em "Criar Solicitação" para começar.'}
-                </p>
-              </motion.div>
-            ) : viewMode === "kanban" ? (
-              <KanbanView
-                requests={visibleRequests}
-                uploads={uploads ?? []}
-                isPro={isPro}
-                slug={slug ?? ""}
-                copiedId={copiedId}
-                downloadingZipId={downloadingZipId}
-                onCopy={handleCopy}
-                onReminder={handleMagicReminder}
-                onDownloadZip={handleDownloadZip}
-                onUpgradeModal={() => setUpgradeModalOpen(true)}
-                formatDate={formatDate}
-                onManageRequest={(id: string, name: string) => {
-                  setSelectedRequest({ id, clientName: name });
-                  setManageRequestOpen(true);
-                }}
-              />
-            ) : (
-              <div className="space-y-3">
-                {visibleRequests.map((req: any, i: number) => {
-                  const completed = req.request_items?.filter((item: any) => item.is_completed).length ?? 0;
-                  const total = req.request_items?.length ?? 0;
-                  const stageGroups = (req.request_items ?? []).reduce((acc: Record<string, any[]>, item: any) => {
-                    if (!acc[item.stage_name]) acc[item.stage_name] = [];
-                    acc[item.stage_name].push(item);
-                    return acc;
-                  }, {});
-                  const isExpired = req.expires_at && new Date(req.expires_at) < new Date();
-
-                  return (
-                    <motion.div
-                      key={req.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: i * 0.03 }}
-                      className={`rounded-2xl border bg-card p-5 shadow-card hover:shadow-elevated transition-all duration-300 ${isExpired ? "border-destructive/30 opacity-70" : "border-border/60"}`}
-                    >
-                      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                        <div>
-                          <h3 className="font-semibold text-card-foreground flex items-center gap-2">
-                            {req.client_name}
-                            {req.access_password && <LockIcon className="h-3.5 w-3.5 text-pro" />}
-                            {isExpired && <Badge variant="destructive" className="text-[10px]">Expirado</Badge>}
-                            {req.status === "archived" && <Badge variant="secondary" className="text-[10px]">Engavetado</Badge>}
-                            {req.expires_at && !isExpired && (
-                              <Badge variant="outline" className="text-[10px] border-pro/40 text-pro">
-                                <Clock className="mr-0.5 h-2.5 w-2.5" /> {formatDate(req.expires_at)}
-                              </Badge>
-                            )}
-                          </h3>
-                          <p className="text-xs text-muted-foreground">{formatDate(req.created_at)}</p>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                            completed === total && total > 0 ? "bg-success/10 text-success" : "bg-accent text-accent-foreground"
-                          }`}>
-                            {completed}/{total} enviados
-                          </span>
-                          
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="rounded-xl text-destructive hover:bg-destructive/10 px-2"
-                            onClick={() => {
-                              setSelectedRequest({ id: req.id, clientName: req.client_name });
-                              setManageRequestOpen(true);
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-
-                          <Button variant="outline" size="sm" onClick={() => handleCopy(req.id)} className="rounded-xl transition-all duration-200">
-                            {copiedId === req.id ? <><Check className="mr-1 h-3 w-3 text-success" /> Copiado</> : <><Copy className="mr-1 h-3 w-3" /> Copiar link</>}
-                          </Button>
-                          <Button variant="outline" size="sm" className="rounded-xl transition-all duration-200" onClick={() => handleMagicReminder(req)}>
-                            {!isPro && <LockIcon className="mr-1 h-3 w-3" />}
-                            <MessageCircle className="mr-1 h-3 w-3" /> Lembrete 🪄
-                          </Button>
-                          <Button variant="ghost" size="sm" className="rounded-xl text-xs" onClick={() => isPro ? setAuditRequestId(auditRequestId === req.id ? null : req.id) : setUpgradeModalOpen(true)}>
-                            {!isPro && <LockIcon className="mr-1 h-3 w-3" />} 📜 Histórico
-                          </Button>
-                          <Button variant="outline" size="sm" className="rounded-xl transition-all duration-200" disabled={downloadingZipId === req.id} onClick={() => handleDownloadZip(req.id, req.client_name)}>
-                            {downloadingZipId === req.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Archive className="mr-1 h-3 w-3" />} Baixar ZIP 📦
-                          </Button>
-                        </div>
-                      </div>
-
-                      {Object.keys(stageGroups).length > 1 ? (
-                        <Accordion type="multiple" className="mt-2">
-                          {Object.entries(stageGroups).map(([stage, items]: [string, any[]]) => (
-                            <AccordionItem key={stage} value={stage} className="border-border/40">
-                              <AccordionTrigger className="text-xs font-semibold text-muted-foreground uppercase tracking-wider py-2 hover:no-underline">
-                                {stage} ({items.filter((i: any) => i.is_completed).length}/{items.length})
-                              </AccordionTrigger>
-                              <AccordionContent>
-                                <div className="flex flex-wrap gap-1">
-                                  {items.map((item: any) => (
-                                    <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
-                                      item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
-                                    }`}>
-                                      {item.item_name}
-                                    </span>
-                                  ))}
-                                </div>
-                              </AccordionContent>
-                            </AccordionItem>
-                          ))}
-                        </Accordion>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          {req.request_items?.map((item: any) => (
-                            <span key={item.id} className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
-                              item.is_completed ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
-                            }`}>
-                              {item.item_name}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {isPro && auditRequestId === req.id && company && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          className="mt-4 pt-4 border-t border-border/40"
-                        >
-                          <h4 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">📜 Histórico de Atividades</h4>
-                          <AuditLogTimeline requestId={req.id} companyId={company.id} />
-                        </motion.div>
-                      )}
-                    </motion.div>
-                  );
-                })}
-              </div>
-            )}
+             ))}
           </TabsContent>
 
           <TabsContent value="files">
-            <div className="mb-4 flex flex-col sm:flex-row gap-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Buscar por nome do arquivo ou cliente..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 rounded-xl" />
-              </div>
-            </div>
-
-            <div className="mb-4 flex gap-2 flex-wrap">
-              {([
-                { key: "all", label: "Todos", count: uploads?.length ?? 0 },
-                { key: "pending", label: "Pendentes ⏳", count: pendingCount },
-                { key: "approved", label: "Aprovados ✅", count: approvedCount },
-                { key: "rejected", label: "Rejeitados ❌", count: rejectedCount },
-              ] as const).map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setFileFilter(tab.key)}
-                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition-all duration-200 ${
-                    fileFilter === tab.key
-                      ? "gradient-primary text-primary-foreground shadow-hero"
-                      : "bg-card border border-border/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  }`}
-                >
-                  {tab.label} ({tab.count})
-                </button>
-              ))}
-            </div>
-
-            {uploadsLoading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-16 w-full rounded-2xl" />
-                ))}
-              </div>
-            ) : filteredUploads.length === 0 ? (
-              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-16">
-                <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-accent to-accent/50 border border-border/40">
-                  <Download className="h-8 w-8 text-muted-foreground/40" />
-                </div>
-                <p className="text-lg font-bold text-foreground mb-1">Nenhum arquivo por aqui 📭</p>
-                <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-                  Quando seus clientes enviarem documentos, eles aparecerão aqui para revisão.
-                </p>
-              </motion.div>
-            ) : Object.keys(uploadsByClient).length > 0 ? (
-              <Accordion type="multiple" defaultValue={Object.keys(uploadsByClient)} className="space-y-2">
-                {Object.entries(uploadsByClient).map(([clientName, files]) => (
-                  <AccordionItem key={clientName} value={clientName} className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
-                    <AccordionTrigger className="px-5 py-3 text-sm font-semibold text-foreground hover:no-underline">
-                      👤 {clientName} <span className="ml-2 text-xs text-muted-foreground font-normal">({files.length} arquivo{files.length !== 1 ? "s" : ""})</span>
-                    </AccordionTrigger>
-                    <AccordionContent className="px-0 pb-0">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Arquivo</TableHead>
-                            <TableHead>Documento</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Tamanho</TableHead>
-                            <TableHead>Data</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {files.map((file: any) => (
-                            <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
-                              <TableCell className="font-medium">{file.file_name}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{file.request_items?.item_name ?? "—"}</TableCell>
-                              <TableCell>
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                                  file.status === "approved" ? "bg-success/10 text-success" :
-                                  file.status === "rejected" ? "bg-destructive/10 text-destructive" :
-                                  "bg-accent text-accent-foreground"
-                                }`}>
-                                  {file.status === "approved" ? "✅" : file.status === "rejected" ? "❌" : "⏳"}
-                                </span>
-                              </TableCell>
-                              <TableCell className="text-muted-foreground">{formatSize(file.file_size)}</TableCell>
-                              <TableCell className="text-muted-foreground">{formatDate(file.created_at)}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </AccordionContent>
-                  </AccordionItem>
-                ))}
-              </Accordion>
-            ) : (
-              <div className="rounded-2xl border border-border/60 bg-card shadow-card overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Arquivo</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Tamanho</TableHead>
-                      <TableHead>Data</TableHead>
+             <div className="mb-4 relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Buscar arquivos..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-10 rounded-xl" /></div>
+             <Table className="border rounded-2xl overflow-hidden">
+                <TableHeader><TableRow><TableHead>Arquivo</TableHead><TableHead>Cliente</TableHead><TableHead>Status</TableHead><TableHead>Data</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {filteredUploads.map((file: any) => (
+                    <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
+                      <TableCell className="font-medium">{file.file_name}</TableCell>
+                      <TableCell className="text-xs">{file.request_items?.document_requests?.client_name}</TableCell>
+                      <TableCell><Badge variant="outline" className={file.status === 'approved' ? 'text-success border-success/40' : file.status === 'rejected' ? 'text-destructive border-destructive/40' : ''}>{file.status}</Badge></TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{new Date(file.created_at).toLocaleDateString()}</TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredUploads.map((file: any) => (
-                      <TableRow key={file.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
-                        <TableCell className="font-medium">{file.file_name}</TableCell>
-                        <TableCell>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            file.status === "approved" ? "bg-success/10 text-success" :
-                            file.status === "rejected" ? "bg-destructive/10 text-destructive" :
-                            "bg-accent text-accent-foreground"
-                          }`}>
-                            {file.status === "approved" ? "✅" : file.status === "rejected" ? "❌" : "⏳"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{formatSize(file.file_size)}</TableCell>
-                        <TableCell className="text-muted-foreground">{formatDate(file.created_at)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+                  ))}
+                </TableBody>
+             </Table>
           </TabsContent>
 
           <TabsContent value="settings">
-            <div className="space-y-6">
-              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
-                <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
-                <div className="space-y-4 max-w-md">
-                  <div className="space-y-2">
-                    <Label htmlFor="display-name">Nome de Exibição</Label>
-                    <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="rounded-xl" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="slug">Slug da URL</Label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground whitespace-nowrap">/{""}</span>
-                      <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} className="rounded-xl" />
-                      <span className="text-sm text-muted-foreground">/enviar</span>
-                    </div>
-                  </div>
+            <div className="grid gap-6 max-w-2xl">
+              <div className="p-6 border rounded-2xl bg-card space-y-4">
+                <h3 className="font-bold">Perfil da Empresa</h3>
+                <div className="grid gap-4">
+                  <div><Label>Nome de Exibição</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} className="rounded-xl" /></div>
+                  <div><Label>ownCloud URL (PRO)</Label><Input placeholder="https://..." value={owncloudUrl} onChange={e => setOwncloudUrl(e.target.value)} className="rounded-xl" /></div>
                 </div>
+                <Button onClick={() => updateSettings.mutate()} className="rounded-xl gradient-primary">Salvar Alterações</Button>
               </div>
-
-              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
-                <div className="flex items-center gap-2 mb-4">
-                  <Palette className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">Branding Avançado 🎨</h3>
-                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
-                </div>
-                <div className="space-y-4 max-w-md">
-                  <div className="space-y-2">
-                    <Label>Logo da Empresa</Label>
-                    <div className="flex items-center gap-4">
-                      {logoUrl && (
-                        <img src={logoUrl} alt="Logo" className="h-12 w-12 rounded-2xl object-cover border border-border shadow-card" />
-                      )}
-                      <label className={`cursor-pointer inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent ${!isPro ? 'opacity-50 pointer-events-none' : ''}`}>
-                        {logoUploading ? (
-                          <><Loader2 className="h-4 w-4 animate-spin" /> Enviando...</>
-                        ) : (
-                          <><Upload className="h-4 w-4" /> {logoUrl ? "Trocar logo" : "Enviar logo"}</>
-                        )}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          disabled={!isPro || logoUploading}
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (!file || !company) return;
-                            if (!isPro) { setUpgradeModalOpen(true); return; }
-                            setLogoUploading(true);
-                            try {
-                              const ext = file.name.split('.').pop();
-                              const filePath = `${company.id}/logo.${ext}`;
-                              const { error: uploadError } = await supabase.storage
-                                .from("logos")
-                                .upload(filePath, file, { upsert: true });
-                              if (uploadError) throw uploadError;
-                              const { data: urlData } = supabase.storage.from("logos").getPublicUrl(filePath);
-                              const publicUrl = urlData.publicUrl + "?t=" + Date.now();
-                              setLogoUrl(publicUrl);
-                              toast.success("Logo enviada! Salve as configurações para aplicar ✅");
-                            } catch (err: any) {
-                              console.error("[logo-upload]", err);
-                              toast.error("Erro ao enviar logo", { description: err.message });
-                            } finally {
-                              setLogoUploading(false);
-                              e.target.value = "";
-                            }
-                          }}
-                        />
-                      </label>
-                      {logoUrl && isPro && (
-                        <Button variant="ghost" size="sm" className="text-destructive rounded-xl" onClick={() => setLogoUrl("")}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> CNPJ</Label>
-                    <Input placeholder="00.000.000/0001-00" value={cnpj} onChange={(e) => isPro ? setCnpj(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" /> Telefone de Contato</Label>
-                    <Input placeholder="(14) 99999-9999" value={phone} onChange={(e) => isPro ? setPhone(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Cor da Marca</Label>
-                    <div className="flex items-center gap-4">
-                      <input type="color" value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : setUpgradeModalOpen(true)} className="h-10 w-10 rounded-xl border border-border cursor-pointer" disabled={!isPro} />
-                      <Input value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : undefined} className="rounded-xl max-w-[120px] font-mono text-sm" disabled={!isPro} readOnly={!isPro} />
-                      <div className="h-10 w-10 rounded-xl border border-border" style={{ backgroundColor: brandColor }} />
-                      {!isPro && (
-                        <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setUpgradeModalOpen(true)}>
-                          <LockIcon className="mr-1.5 h-3 w-3" /> Desbloquear
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
-                <div className="flex items-center gap-2 mb-4">
-                  <Cloud className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">Sincronização em Nuvem (ownCloud) ☁️</h3>
-                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
-                </div>
-                <p className="text-xs text-muted-foreground mb-4">
-                  Configure seu servidor ownCloud para sincronizar automaticamente arquivos aprovados via WebDAV.
-                </p>
-                <div className="space-y-4 max-w-md">
-                  <div className="space-y-2">
-                    <Label>URL do Servidor ownCloud</Label>
-                    <Input placeholder="https://cloud.seudominio.com.br" value={owncloudUrl} onChange={(e) => isPro ? setOwncloudUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Usuário</Label>
-                    <Input placeholder="admin" value={owncloudUser} onChange={(e) => isPro ? setOwncloudUser(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Senha / Token de Aplicativo</Label>
-                    <Input type="password" placeholder="Token de aplicativo..." value={owncloudToken} onChange={(e) => isPro ? setOwncloudToken(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  {isPro && owncloudUrl && (
-                    <p className="text-xs text-success flex items-center gap-1">
-                      <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
-              </Button>
             </div>
           </TabsContent>
         </Tabs>
       </main>
 
-      {/* Manage Request Modal */}
-      <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
-        <DialogContent className="max-w-sm rounded-3xl">
-          <DialogHeader>
-            <DialogTitle>Gerenciar Solicitação</DialogTitle>
-          </DialogHeader>
-          <div className="py-4 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-foreground">
-              <AlertTriangle className="h-6 w-6 text-amber-500" />
-            </div>
-            <p className="text-sm text-muted-foreground mb-6">
-              O que você deseja fazer com a solicitação de <strong className="text-foreground">{selectedRequest?.clientName}</strong>?
-            </p>
-            <div className="flex flex-col gap-3">
-              <Button
-                variant="outline"
-                className="rounded-xl h-11"
-                onClick={() => selectedRequest && archiveRequest.mutate(selectedRequest.id)}
-                disabled={archiveRequest.isPending || deleteRequest.isPending}
-              >
-                {archiveRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
-                📦 Engavetar (Arquivar)
-              </Button>
-              <Button
-                variant="destructive"
-                className="rounded-xl h-11"
-                onClick={() => selectedRequest && deleteRequest.mutate(selectedRequest.id)}
-                disabled={archiveRequest.isPending || deleteRequest.isPending}
-              >
-                {deleteRequest.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-                🗑️ Excluir Permanentemente
-              </Button>
-              <Button
-                variant="ghost"
-                className="rounded-xl mt-2"
-                onClick={() => setManageRequestOpen(false)}
-              >
-                Cancelar
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* File Preview Modal */}
-      <ErrorBoundary fallbackMessage="Erro ao carregar pré-visualização do arquivo">
+      <ErrorBoundary fallbackMessage="Erro no preview">
         <FilePreviewModal
           open={previewOpen}
           onOpenChange={setPreviewOpen}
           file={previewFile}
+          owncloudUrl={owncloudUrl} // PASSANDO A PROP PARA O MODAL
           onStatusChange={() => {
             queryClient.invalidateQueries({ queryKey: ["uploads", company?.id] });
             queryClient.invalidateQueries({ queryKey: ["requests", company?.id] });
@@ -1502,63 +442,15 @@ const DashboardPage = () => {
         />
       </ErrorBoundary>
 
-      {/* Pro Upgrade Modal */}
-      <Dialog open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen}>
+      <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
         <DialogContent className="max-w-sm rounded-3xl text-center">
-          <div className="flex flex-col items-center gap-4 py-4">
-            <div className="h-16 w-16 rounded-3xl gradient-primary flex items-center justify-center shadow-hero">
-              <Crown className="h-8 w-8 text-primary-foreground" />
+          <div className="py-4 space-y-4">
+            <div className="mx-auto w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center"><AlertTriangle className="text-destructive" /></div>
+            <p className="text-sm">Gerenciar solicitação de <b>{selectedRequest?.clientName}</b>?</p>
+            <div className="flex flex-col gap-2">
+              <Button variant="outline" className="rounded-xl" onClick={() => selectedRequest && archiveRequest.mutate(selectedRequest.id)}>Engavetar Solicitação</Button>
+              <Button variant="destructive" className="rounded-xl" onClick={() => selectedRequest && deleteRequest.mutate(selectedRequest.id)}>Excluir Permanentemente</Button>
             </div>
-            <h2 className="text-xl font-bold text-foreground">Desbloqueie o Pro ✨</h2>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Solicitações ilimitadas, uploads de até 2GB, white-label, lembrete mágico, senha no link, expiração, ownCloud sync, logs de auditoria e muito mais.
-            </p>
-            <div className="mt-2">
-              <span className="text-3xl font-extrabold text-foreground">R$49</span>
-              <span className="text-muted-foreground">/mês</span>
-            </div>
-            <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer" className="w-full">
-              <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                Fazer Upgrade Agora 🚀
-              </Button>
-            </a>
-            <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-              Agora não
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Cloud Sync Modal */}
-      <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
-        <DialogContent className="max-w-sm rounded-3xl text-center">
-          <div className="flex flex-col items-center gap-4 py-4">
-            <div className="h-16 w-16 rounded-3xl bg-accent flex items-center justify-center">
-              <Cloud className="h-8 w-8 text-accent-foreground" />
-            </div>
-            <h2 className="text-xl font-bold text-foreground">ownCloud Sync ☁️</h2>
-            {owncloudUrl ? (
-              <>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Configurado! Arquivos aprovados são sincronizados automaticamente para <strong className="text-foreground">{owncloudUrl}</strong>
-                </p>
-                <Badge variant="outline" className="text-xs border-success/40 text-success">
-                  <Check className="mr-1 h-3 w-3" /> Ativo
-                </Badge>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Configure seu servidor ownCloud na aba Configurações para ativar a sincronização automática via WebDAV.
-                </p>
-                <Button variant="outline" className="rounded-xl" onClick={() => { setCloudSyncModalOpen(false); }}>
-                  Ir para Configurações
-                </Button>
-              </>
-            )}
-            <button onClick={() => setCloudSyncModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors mt-2">
-              Fechar
-            </button>
           </div>
         </DialogContent>
       </Dialog>
