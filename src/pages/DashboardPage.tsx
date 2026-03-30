@@ -1,29 +1,3 @@
-/**
- * DashboardPage — Painel do profissional (v4)
- *
- * Features:
- * - View modes: Lista / Kanban
- * - Tabs de filtro (Todos / Pendentes / Aprovados / Rejeitados)
- * - Busca rápida por nome de arquivo ou cliente
- * - Agrupamento por etapas com Accordions
- * - Preview modal de arquivos com Aprovar/Rejeitar(+motivo)/Baixar
- * - Audit log timeline (PRO)
- * - Color picker de branding (PRO)
- * - OwnCloud Sync (PRO - WebDAV)
- * - Lembrete Mágico via WhatsApp (PRO)
- * - Senha de acesso no link (PRO)
- * - Link com expiração (PRO)
- * - Campos de texto no checklist
- * - Branding: Logo URL, CNPJ, Telefone, Cor (PRO)
- * - Excluir/Engavetar solicitações
- *
- * NOTA para migração:
- * - Signed URLs via supabase.storage.createSignedUrl (substituir por endpoint próprio)
- * - RLS policies documentadas em cada migration
- * - document_requests.access_password: senha em texto simples (migrar para hash em produção)
- * - OwnCloud WebDAV: credenciais em companies.owncloud_url/user/token
- */
-
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -259,6 +233,21 @@ const DashboardPage = () => {
     enabled: !!company?.id,
   });
 
+  // ─── Buscar templates customizados (se for Pro) ───
+  const { data: customTemplates } = useQuery({
+    queryKey: ["my-custom-templates", company?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("templates")
+        .select("*, template_items(*)")
+        .eq("company_id", company!.id)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!company?.id && isPro,
+  });
+
   // Realtime: listen for uploads changes to update dashboard instantly
   useEffect(() => {
     if (!company?.id) return;
@@ -312,6 +301,22 @@ const DashboardPage = () => {
     template.items.forEach((t) => {
       if (!merged.some((m) => m.itemName === t.label)) {
         merged.push({ stageName: t.stage, itemName: t.label, itemType: "file" });
+      }
+    });
+    setChecklistItems(merged);
+    toast.success(`Template "${template.name}" aplicado 🎉`);
+  };
+
+  // ─── Função para aplicar o template customizado (PRO) ───
+  const applyCustomTemplate = (template: any) => {
+    const merged = [...checklistItems];
+    template.template_items.forEach((t: any) => {
+      if (!merged.some((m) => m.itemName === t.item_name)) {
+        merged.push({ 
+          stageName: t.stage_name, 
+          itemName: t.item_name, 
+          itemType: t.item_type || "file" 
+        });
       }
     });
     setChecklistItems(merged);
@@ -662,6 +667,17 @@ const DashboardPage = () => {
             )}
           </div>
           <div className="flex gap-2 flex-wrap">
+            {/* NOVO BOTÃO DE TEMPLATES 🎨 */}
+            <Button
+              variant="outline"
+              className="rounded-xl transition-all duration-200"
+              onClick={() => navigate(`/${slug}/templates`)}
+            >
+              <LayoutList className="mr-1.5 h-4 w-4" />
+              Templates
+              {!isPro && <LockIcon className="ml-1.5 h-3 w-3 text-muted-foreground" />}
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -702,6 +718,21 @@ const DashboardPage = () => {
                         </Button>
                       ))}
                     </div>
+
+                    {/* RENDERIZAR OS TEMPLATES CUSTOMIZADOS AQUI 👇 */}
+                    {isPro && customTemplates && customTemplates.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-border/50">
+                        <Label className="flex items-center gap-1.5 mb-2"><Crown className="h-3.5 w-3.5 text-pro" /> Meus Templates</Label>
+                        <div className="flex flex-wrap gap-2">
+                          {customTemplates.map((tpl: any) => (
+                            <Button key={tpl.id} variant="outline" size="sm" onClick={() => applyCustomTemplate(tpl)} type="button" className="rounded-xl border-pro/30 hover:bg-pro/10 hover:text-pro transition-all duration-200">
+                              <FileText className="mr-1.5 h-3.5 w-3.5" /> {tpl.name}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* FIM DA RENDERIZAÇÃO CUSTOMIZADA */}
                   </div>
 
                   <div className="space-y-2">
