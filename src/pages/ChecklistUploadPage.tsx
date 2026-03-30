@@ -1,10 +1,7 @@
-/**
- * ChecklistUploadPage — Página pública de upload do cliente
- */
-
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Loader2, ArrowRight } from "lucide-react";
+import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Type, Loader2, ArrowRight } from "lucide-react";
 import { useParams, Link } from "react-router-dom";
+import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -14,732 +11,317 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
 import { validateAndProcessFile } from "@/lib/file-security";
-
-interface RequestItem {
-  id: string;
-  item_name: string;
-  stage_name: string;
-  is_completed: boolean;
-  sort_order: number;
-  item_type: string;
-  text_answer: string | null;
-}
-
-interface UploadRecord {
-  id: string;
-  request_item_id: string;
-  status: string;
-  rejection_reason: string | null;
-  file_name: string;
-}
-
-interface DocumentRequest {
-  id: string;
-  client_name: string;
-  company_id: string;
-  access_password: string | null;
-  expires_at: string | null;
-}
 
 const ChecklistUploadPage = () => {
   const { slug, requestId } = useParams<{ slug: string; requestId: string }>();
   const queryClient = useQueryClient();
+  
+  // Estados de controle
   const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<Record<string, File>>({});
-  
-  // LGPD & Gate states
   const [lgpdAccepted, setLgpdAccepted] = useState(false);
   const [gatePassed, setGatePassed] = useState(false);
   const [clientIp, setClientIp] = useState<string | null>(null);
 
-  // Password protection state
+  // Password protection
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordVerified, setPasswordVerified] = useState(false);
 
-  // Global drag prevention
-  useEffect(() => {
-    const preventDrop = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("dragover", preventDrop);
-    window.addEventListener("drop", preventDrop);
-    return () => {
-      window.removeEventListener("dragover", preventDrop);
-      window.removeEventListener("drop", preventDrop);
-    };
-  }, []);
-
-  // Fetch Client IP automatically for LGPD audit
+  // Captura IP para Auditoria LGPD
   useEffect(() => {
     fetch('https://api.ipify.org?format=json')
       .then(res => res.json())
       .then(data => setClientIp(data.ip))
-      .catch(() => setClientIp("IP_INDISPONIVEL"));
+      .catch(() => setClientIp("IP_UNAVAILABLE"));
   }, []);
 
-  // Fetch company
+  // 1. Queries de Dados
   const { data: company, isLoading: companyLoading } = useQuery({
     queryKey: ["company", slug],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("companies")
-        .select("id, display_name, slug, logo_url, primary_color, cnpj, phone")
-        .eq("slug", slug)
-        .single();
+      const { data, error } = await supabase.from("companies").select("*").eq("slug", slug).single();
       if (error) throw error;
       return data;
     },
     enabled: !!slug,
   });
 
-  // Fetch plan
   const { data: plan } = useQuery({
     queryKey: ["plan-watermark", company?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("user_plans")
-        .select("show_watermark, max_file_size_mb, plan")
-        .eq("company_id", company!.id)
-        .single();
-      if (error) return { show_watermark: true, max_file_size_mb: 50, plan: "free" as const };
-      return data;
+      const { data } = await supabase.from("user_plans").select("*").eq("company_id", company!.id).single();
+      return data || { show_watermark: true, max_file_size_mb: 50, plan: "free" };
     },
     enabled: !!company?.id,
   });
 
-  const isPro = plan?.plan === "pro";
-
-  // Fetch document request
   const { data: request, isLoading: requestLoading } = useQuery({
     queryKey: ["request", requestId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("document_requests")
-        .select("id, client_name, company_id, access_password, expires_at")
-        .eq("id", requestId)
-        .single();
+      const { data, error } = await supabase.from("document_requests").select("*").eq("id", requestId).single();
       if (error) throw error;
-      return data as DocumentRequest;
+      return data;
     },
     enabled: !!requestId,
   });
 
-  // Fetch checklist items
-  const { data: items, isLoading: itemsLoading, refetch: refetchItems } = useQuery({
+  const { data: items, isLoading: itemsLoading } = useQuery({
     queryKey: ["request-items", requestId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("request_items")
-        .select("id, item_name, stage_name, is_completed, sort_order, item_type, text_answer")
-        .eq("request_id", requestId)
-        .order("sort_order", { ascending: true });
+      const { data, error } = await supabase.from("request_items").select("*").eq("request_id", requestId).order("sort_order", { ascending: true });
       if (error) throw error;
-      return data as RequestItem[];
+      return data;
     },
     enabled: !!requestId,
   });
 
-  // Fetch uploads
-  const itemIds = useMemo(() => items?.map((i) => i.id) ?? [], [items]);
-
-  const { data: uploads, refetch: refetchUploads } = useQuery({
-    queryKey: ["client-uploads", requestId, itemIds],
+  const { data: uploads } = useQuery({
+    queryKey: ["client-uploads", requestId],
     queryFn: async () => {
-      if (itemIds.length === 0) return [] as UploadRecord[];
-      const { data, error } = await supabase
-        .from("uploads")
-        .select("id, request_item_id, status, rejection_reason, file_name")
-        .in("request_item_id", itemIds)
-        .order("created_at", { ascending: false });
-      if (error) return [] as UploadRecord[];
-      return (data ?? []) as UploadRecord[];
+      const { data } = await supabase.from("uploads").select("*").in("request_item_id", items?.map(i => i.id) || []);
+      return data || [];
     },
-    enabled: itemIds.length > 0,
+    enabled: !!items?.length,
   });
 
-  // Realtime
-  useEffect(() => {
-    if (!requestId || !items || items.length === 0) return;
-
-    const channel = supabase
-      .channel(`checklist-${requestId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "request_items", filter: `request_id=eq.${requestId}` },
-        () => { refetchItems(); }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "uploads" },
-        (payload) => {
-          const itemId = (payload.new as any)?.request_item_id ?? (payload.old as any)?.request_item_id;
-          if (itemId && items.some((i) => i.id === itemId)) {
-            refetchUploads();
-            refetchItems();
-          }
-        }
-      )
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [requestId, items?.length]);
-
+  // 2. Mapeamento de Status
   const uploadsByItem = useMemo(() => {
-    const map: Record<string, UploadRecord> = {};
-    if (!uploads) return map;
-    for (const u of uploads) {
-      if (!map[u.request_item_id]) {
-        map[u.request_item_id] = u;
-      }
-    }
+    const map: Record<string, any> = {};
+    uploads?.forEach(u => { if (!map[u.request_item_id]) map[u.request_item_id] = u; });
     return map;
   }, [uploads]);
 
-  const isLoading = companyLoading || requestLoading || itemsLoading;
-  const totalCount = items?.length ?? 0;
+  // 3. REAL-TIME MAGIC ⚡ (Atualiza quando o profissional aprova/rejeita)
+  useEffect(() => {
+    if (!requestId) return;
+    const channel = supabase.channel(`public-checklist-${requestId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "uploads" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["client-uploads", requestId] });
+        queryClient.invalidateQueries({ queryKey: ["request-items", requestId] });
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "request_items", filter: `request_id=eq.${requestId}` }, () => {
+        queryClient.invalidateQueries({ queryKey: ["request-items", requestId] });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [requestId, queryClient]);
 
-  // Check all approved
-  const allApproved = useMemo(() => {
-    if (!items || items.length === 0) return false;
-    return items.every((item) => {
-      const upload = uploadsByItem[item.id];
-      return upload?.status === "approved";
-    });
-  }, [items, uploadsByItem]);
-
-  const completedCount = items?.filter((i) => i.is_completed).length ?? 0;
-
-  // Group items by stage
-  const stages = items?.reduce<Record<string, RequestItem[]>>((acc, item) => {
-    if (!acc[item.stage_name]) acc[item.stage_name] = [];
-    acc[item.stage_name].push(item);
-    return acc;
-  }, {}) ?? {};
-
-  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
-
-  const stageFile = async (itemId: string, file: File) => {
-    const maxMb = plan?.max_file_size_mb ?? 50;
-    if (file.size > maxMb * 1024 * 1024) {
-      toast.error(`Arquivo muito grande`, { description: `Limite de ${maxMb}MB por arquivo.` });
-      return;
-    }
-
-    setProcessingItemId(itemId);
-    try {
-      const result = await validateAndProcessFile(file);
-      if (!result.valid) {
-        toast.error("Arquivo bloqueado 🚫", { description: result.error, duration: 6000 });
-        return;
-      }
-      const processed = result.processedFile!;
-      if (processed.size < file.size) {
-        const saved = ((1 - processed.size / file.size) * 100).toFixed(0);
-        toast.success(`Imagem otimizada! 📸`, { description: `Redução de ${saved}% no tamanho.` });
-      }
-      setStagedFiles((prev) => ({ ...prev, [itemId]: processed }));
-    } catch (err) {
-      toast.error("Erro ao processar arquivo");
-    } finally {
-      setProcessingItemId(null);
-    }
-  };
-
-  const removeStagedFile = (itemId: string) => {
-    setStagedFiles((prev) => {
-      const next = { ...prev };
-      delete next[itemId];
-      return next;
-    });
-  };
-
+  // 4. Handlers de Upload
   const confirmUpload = async (itemId: string) => {
     const file = stagedFiles[itemId];
     if (!file || !company || !request) return;
-
     setUploadingItemId(itemId);
     setUploadProgress(10);
-
     try {
-      const timestamp = Date.now();
-      const filePath = `${company.id}/${request.id}/${itemId}/${timestamp}_${file.name}`;
-      setUploadProgress(30);
-
-      const { error: storageError } = await supabase.storage
-        .from("uploads")
-        .upload(filePath, file, { upsert: false });
-
-      if (storageError) throw new Error(`Falha no envio: ${storageError.message}`);
+      const filePath = `${company.id}/${request.id}/${itemId}/${Date.now()}_${file.name}`;
+      await supabase.storage.from("uploads").upload(filePath, file);
       setUploadProgress(60);
-
-      // Inserção no banco com a Auditoria LGPD inclusa!
-      const { error: dbError } = await supabase.from("uploads").insert({
-        request_item_id: itemId,
-        company_id: company.id,
-        file_name: file.name,
-        file_size: file.size,
-        file_path: filePath,
-        content_type: file.type || "application/octet-stream",
-        lgpd_consent: true,
-        uploader_ip: clientIp || "IP_NAO_CAPTURADO"
+      await supabase.from("uploads").insert({
+        request_item_id: itemId, company_id: company.id, file_name: file.name,
+        file_size: file.size, file_path: filePath, content_type: file.type || "application/octet-stream",
+        lgpd_consent: true, uploader_ip: clientIp || "CAPTURING"
       } as any);
-
-      if (dbError) throw new Error(`Falha ao registrar: ${dbError.message}`);
       setUploadProgress(100);
-      toast.success(`"${file.name}" enviado! ✅`);
-
+      toast.success("Enviado com sucesso! ✅");
       setTimeout(() => {
         setUploadingItemId(null);
-        setUploadProgress(0);
-        removeStagedFile(itemId);
-        refetchItems();
-        refetchUploads();
+        setStagedFiles(prev => { const n = {...prev}; delete n[itemId]; return n; });
+        queryClient.invalidateQueries({ queryKey: ["request-items", requestId] });
       }, 600);
-    } catch (err: any) {
-      toast.error("Erro no upload 😔", { description: err.message });
-      setUploadingItemId(null);
-      setUploadProgress(0);
-    }
+    } catch (err) { toast.error("Erro no envio"); setUploadingItemId(null); }
   };
 
-  const handleDragOver = useCallback((e: React.DragEvent, itemId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOverItemId(itemId);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOverItemId(null);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent, itemId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOverItemId(null);
-    const file = e.dataTransfer.files[0];
-    if (file) stageFile(itemId, file);
-  }, [plan]);
-
+  const isPro = plan?.plan === "pro";
   const brandColor = isPro ? company?.primary_color : undefined;
   const needsPassword = !!request?.access_password && !passwordVerified;
-  const isExpired = request?.expires_at ? new Date(request.expires_at) < new Date() : false;
+  const allApproved = items?.length > 0 && items.every(item => uploadsByItem[item.id]?.status === "approved");
 
-  const verifyPassword = () => {
-    if (passwordInput === request?.access_password) {
-      setPasswordVerified(true);
-    } else {
-      toast.error("Senha incorreta 🔒");
-    }
-  };
+  if (companyLoading || requestLoading || itemsLoading) return <div className="p-12 max-w-lg mx-auto space-y-4"><Skeleton className="h-12 w-12 rounded-2xl" /><Skeleton className="h-6 w-48" /><Skeleton className="h-32 w-full rounded-3xl" /></div>;
 
-  const [countdown, setCountdown] = useState("");
-  useEffect(() => {
-    if (!request?.expires_at || isExpired) return;
-    const update = () => {
-      const diff = new Date(request.expires_at!).getTime() - Date.now();
-      if (diff <= 0) { setCountdown("Expirado"); return; }
-      const d = Math.floor(diff / 86400000);
-      const h = Math.floor((diff % 86400000) / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setCountdown(`${d > 0 ? d + "d " : ""}${h}h ${m}m ${s}s`);
-    };
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [request?.expires_at, isExpired]);
-
-  // Loading Screen
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
-        <div className="w-full max-w-lg space-y-6">
-          <div className="flex flex-col items-center gap-3">
-            <Skeleton className="h-12 w-12 rounded-2xl" />
-            <Skeleton className="h-6 w-40" />
-            <Skeleton className="h-4 w-56" />
-          </div>
-          <Skeleton className="h-2 w-full rounded-full" />
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-2xl" />
-          ))}
+  // --- TELA DE SENHA ---
+  if (needsPassword) return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-sm text-center space-y-6">
+        <div className="mx-auto w-16 h-16 rounded-3xl gradient-primary flex items-center justify-center shadow-hero"><Lock className="text-white" /></div>
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold">Acesso Restrito</h2>
+          <p className="text-sm text-muted-foreground">Digite a senha fornecida para acessar o checklist.</p>
         </div>
-      </div>
-    );
-  }
+        <Input type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} placeholder="Senha de acesso" className="rounded-xl text-center h-12" onKeyDown={e => e.key === 'Enter' && passwordInput === request.access_password && setPasswordVerified(true)} />
+        <Button onClick={() => passwordInput === request.access_password ? setPasswordVerified(true) : toast.error("Senha incorreta")} className="w-full rounded-xl h-12 gradient-primary shadow-hero">Acessar Documentos 🔓</Button>
+      </motion.div>
+    </div>
+  );
 
-  // Error Screens
-  if (!requestId || !request) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
-            <AlertTriangle className="h-8 w-8 text-destructive" />
+  // --- TELA LGPD GATE ---
+  if (!gatePassed && !allApproved) return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-12">
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-md bg-card border border-border/60 rounded-[2.5rem] p-8 shadow-card text-center space-y-6">
+        <div className="mx-auto w-20 h-20 rounded-[2rem] gradient-primary flex items-center justify-center shadow-hero">
+          {isPro && company?.logo_url ? <img src={company.logo_url} className="w-full h-full object-cover rounded-[2rem]" /> : <Shield className="w-10 h-10 text-white" />}
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold">{company?.display_name}</h1>
+          <p className="text-sm text-muted-foreground mt-1">Checklist de Documentos para <b>{request?.client_name}</b></p>
+        </div>
+        <div className="bg-accent/30 p-5 rounded-3xl border border-border/40 text-left space-y-4">
+          <div className="flex gap-3">
+            <Checkbox id="lgpd" checked={lgpdAccepted} onCheckedChange={checked => setLgpdAccepted(!!checked)} className="mt-1" />
+            <Label htmlFor="lgpd" className="text-xs leading-relaxed text-muted-foreground cursor-pointer">
+              Declaro que li e aceito os <Link to="/termos" className="text-primary font-bold hover:underline">Termos de Uso</Link> e a <Link to="/privacidade" className="text-primary font-bold hover:underline">Política de Privacidade</Link> (LGPD).
+            </Label>
           </div>
-          <h2 className="text-xl font-bold text-foreground">Link inválido 😕</h2>
-          <p className="text-muted-foreground">Solicite o link correto ao seu profissional para acessar esta página.</p>
-        </motion.div>
-      </div>
-    );
-  }
+        </div>
+        <Button disabled={!lgpdAccepted} onClick={() => setGatePassed(true)} className="w-full h-14 rounded-2xl text-lg font-bold gradient-primary shadow-hero hover:shadow-glow transition-all">
+          Começar Envio <ArrowRight className="ml-2" />
+        </Button>
+      </motion.div>
+    </div>
+  );
 
-  if (isExpired) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
-            <Clock className="h-8 w-8 text-destructive" />
-          </div>
-          <h2 className="text-xl font-bold text-foreground">Link Expirado ⏰</h2>
-          <p className="text-muted-foreground">Este link de envio de documentos expirou. Solicite um novo link ao seu profissional.</p>
-        </motion.div>
-      </div>
-    );
-  }
+  // --- TELA DE SUCESSO (Tudo Aprovado) ---
+  if (allApproved) return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="text-center space-y-6">
+        <div className="mx-auto w-24 h-24 rounded-[2rem] bg-success/10 flex items-center justify-center"><PartyPopper className="w-12 h-12 text-success" /></div>
+        <div className="space-y-2">
+          <h2 className="text-3xl font-extrabold">Tudo pronto! 🎉</h2>
+          <p className="text-muted-foreground">Todos os seus documentos foram aprovados por <b>{company?.display_name}</b>.</p>
+        </div>
+        <div className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-success/10 text-success border border-success/20 font-bold">
+          <CheckCircle2 className="w-5 h-5" /> {items.length} Documentos em ordem
+        </div>
+      </motion.div>
+    </div>
+  );
 
-  // Password Screen
-  if (needsPassword) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-6 text-center max-w-sm w-full">
-          <div className="flex h-16 w-16 items-center justify-center rounded-3xl shadow-hero" style={brandColor ? { background: brandColor } : undefined}>
-            {!brandColor && <div className="absolute inset-0 rounded-3xl gradient-primary" />}
-            <Lock className="h-8 w-8 text-primary-foreground relative z-10" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-foreground">Acesso Protegido 🔒</h2>
-            <p className="text-sm text-muted-foreground mt-2">Digite a senha fornecida pelo profissional para acessar seus documentos.</p>
-          </div>
-          <div className="w-full space-y-3">
-            <Input
-              type="password"
-              placeholder="Digite a senha..."
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && verifyPassword()}
-              className="rounded-xl text-center"
-            />
-            <Button
-              onClick={verifyPassword}
-              className="w-full rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
-              style={brandColor ? { background: brandColor } : undefined}
-            >
-              Acessar Documentos 🔓
-            </Button>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
-  // Success Screen
-  if (allApproved) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", duration: 0.8 }} className="flex flex-col items-center gap-6 text-center max-w-md">
-          <motion.div initial={{ rotate: -10, scale: 0 }} animate={{ rotate: 0, scale: 1 }} transition={{ type: "spring", delay: 0.2, stiffness: 200 }} className="flex h-24 w-24 items-center justify-center rounded-3xl bg-success/10">
-            <PartyPopper className="h-12 w-12 text-success" />
-          </motion.div>
-          <div>
-            <motion.h2 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="text-3xl font-bold text-foreground">Parabéns! 🎉</motion.h2>
-            <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }} className="mt-3 text-muted-foreground leading-relaxed">
-              Todos os seus documentos foram <strong className="text-success">aprovados</strong> e o processo está em andamento.
-            </motion.p>
-          </div>
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 }} className="flex items-center gap-2 text-sm text-muted-foreground rounded-2xl bg-success/5 border border-success/20 px-5 py-3">
-            <CheckCircle2 className="h-5 w-5 text-success" />
-            <span>{totalCount} documento{totalCount !== 1 ? "s" : ""} aprovado{totalCount !== 1 ? "s" : ""}</span>
-          </motion.div>
-        </motion.div>
-      </div>
-    );
-  }
-
-  const getItemStatus = (itemId: string) => {
-    const upload = uploadsByItem[itemId];
-    if (!upload) return "waiting";
-    return upload.status;
-  };
-
-  // ──────────────────────────────────────────────────────────
-  // THE NEW LGPD GATE SCREEN 🛑
-  // ──────────────────────────────────────────────────────────
-  if (!gatePassed) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md bg-card border border-border/60 rounded-3xl p-8 shadow-card flex flex-col items-center text-center"
-        >
-          {isPro && company?.logo_url ? (
-            <img src={company.logo_url} alt={company.display_name} className="h-16 w-16 rounded-2xl object-cover shadow-hero mb-4" />
-          ) : (
-            <div
-              className={`flex h-16 w-16 items-center justify-center rounded-2xl shadow-hero mb-4 ${!brandColor ? 'gradient-primary' : ''}`}
-              style={brandColor ? { background: brandColor } : undefined}
-            >
-              <Shield className="h-8 w-8 text-primary-foreground" />
-            </div>
-          )}
-          
-          <h1 className="text-2xl font-bold text-foreground mb-1">{company?.display_name}</h1>
-          <p className="text-sm text-muted-foreground mb-6">
-            Documentos solicitados para <strong className="text-foreground">{request.client_name}</strong>
-          </p>
-
-          {request?.expires_at && countdown && (
-            <div className="mb-6 flex items-center justify-center gap-2 rounded-2xl border border-pro/30 bg-pro/5 px-4 py-2.5 text-sm w-full">
-              <Clock className="h-4 w-4 text-pro" />
-              <span className="text-muted-foreground">Expira em:</span>
-              <span className="font-mono font-semibold text-pro">{countdown}</span>
-            </div>
-          )}
-
-          <div className="w-full bg-accent/30 rounded-2xl p-5 border border-border/40 mb-6 text-left">
-            <div className="flex items-start gap-3">
-              <Checkbox
-                id="lgpd-consent-gate"
-                checked={lgpdAccepted}
-                onCheckedChange={(checked) => setLgpdAccepted(!!checked)}
-                className="mt-1"
-              />
-              <Label htmlFor="lgpd-consent-gate" className="text-sm text-muted-foreground leading-relaxed cursor-pointer">
-                Declaro que li e aceito os <Link to="/termos" target="_blank" className="text-primary font-medium hover:underline">Termos de Uso</Link> e a <Link to="/privacidade" target="_blank" className="text-primary font-medium hover:underline">Política de Privacidade</Link> (LGPD). 
-                Confirmo que os documentos enviados são autênticos e autorizo seu tratamento.
-              </Label>
-            </div>
-          </div>
-
-          <Button
-            onClick={() => setGatePassed(true)}
-            disabled={!lgpdAccepted}
-            className="w-full rounded-2xl h-12 text-base font-semibold shadow-hero hover:shadow-glow transition-all duration-300"
-            style={brandColor ? { background: brandColor, color: '#fff' } : undefined}
-          >
-            Acessar Checklist <ArrowRight className="ml-2 h-5 w-5" />
-          </Button>
-
-          <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Shield className="h-3 w-3" />
-            <span>Portal protegido com criptografia ponta a ponta</span>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // CHECKLIST SCREEN (Only visible after Gate) ✅
-  // ──────────────────────────────────────────────────────────
+  // --- TELA PRINCIPAL DO CHECKLIST ---
   return (
-    <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
-      <div className="w-full max-w-lg">
+    <div className="min-h-screen bg-background pb-20">
+      <div className="max-w-xl mx-auto px-4 py-8 space-y-8">
+        
         {/* Header Compacto */}
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8 flex items-center gap-4 bg-card border border-border/60 p-4 rounded-2xl shadow-sm"
-        >
-          {isPro && company?.logo_url ? (
-            <img src={company.logo_url} alt={company.display_name} className="h-10 w-10 rounded-xl object-cover" />
-          ) : (
-            <div
-              className={`flex h-10 w-10 items-center justify-center rounded-xl shrink-0 ${!brandColor ? 'gradient-primary' : ''}`}
-              style={brandColor ? { background: brandColor } : undefined}
-            >
-              <Shield className="h-5 w-5 text-primary-foreground" />
-            </div>
-          )}
+        <div className="flex items-center gap-4 bg-card border border-border/60 p-4 rounded-3xl shadow-sm">
+          <div className="w-12 h-12 rounded-2xl gradient-primary flex items-center justify-center shrink-0 shadow-sm">
+             {isPro && company?.logo_url ? <img src={company.logo_url} className="w-full h-full object-cover rounded-2xl" /> : <Shield className="text-white w-6 h-6" />}
+          </div>
           <div>
-            <h1 className="text-sm font-bold text-foreground leading-tight">{company?.display_name}</h1>
-            <p className="text-xs text-muted-foreground">Checklist de {request.client_name}</p>
+            <h2 className="font-bold text-foreground">{company?.display_name}</h2>
+            <p className="text-xs text-muted-foreground">Envio seguro de documentos</p>
           </div>
-        </motion.div>
+        </div>
 
-        {/* Progress bar */}
-        {totalCount > 0 && (
-          <div className="mb-6 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Progresso Geral</span>
-              <span className="font-medium text-foreground">
-                {completedCount} de {totalCount} concluídos
-              </span>
-            </div>
-            <div className="relative h-2.5 rounded-full bg-accent overflow-hidden border border-border/40">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${!brandColor ? 'gradient-primary' : ''}`}
-                style={{
-                  width: `${(completedCount / totalCount) * 100}%`,
-                  ...(brandColor ? { backgroundColor: brandColor } : {}),
-                }}
-              />
-            </div>
+        {/* Progresso Real-time */}
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            <span>Seu Progresso</span>
+            <span className="text-foreground">{items?.filter(i => uploadsByItem[i.id]?.status === 'approved').length} de {items?.length} aprovados</span>
           </div>
-        )}
+          <Progress value={(items?.filter(i => uploadsByItem[i.id]?.status === 'approved').length / items?.length) * 100} className="h-3 rounded-full border border-border/40" />
+        </div>
 
-        {/* Checklist by stage */}
-        {Object.entries(stages).map(([stageName, stageItems]) => (
-          <div key={stageName} className="mb-8">
-            <h3 className="mb-3 text-xs font-bold text-muted-foreground uppercase tracking-widest pl-1 border-l-2 border-primary">
-              {stageName}
-            </h3>
-            <div className="space-y-3">
-              {stageItems.map((item, i) => {
-                const staged = stagedFiles[item.id];
-                const isUploading = uploadingItemId === item.id;
-                const itemStatus = getItemStatus(item.id);
-                const isRejected = itemStatus === "rejected";
-                const rejectionReason = uploadsByItem[item.id]?.rejection_reason;
-                const isApproved = itemStatus === "approved";
-                const isTextItem = item.item_type === "text";
-                const canUpload = !isTextItem && (!item.is_completed || isRejected);
+        {/* Lista de Itens */}
+        <div className="space-y-4">
+          <AnimatePresence mode="popLayout">
+            {items?.map((item, idx) => {
+              const upload = uploadsByItem[item.id];
+              const isApproved = upload?.status === "approved";
+              const isRejected = upload?.status === "rejected";
+              const isPending = upload?.status === "pending";
+              const staged = stagedFiles[item.id];
 
-                return (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.03 }}
-                  >
-                    <div
-                      onDragOver={(e) => canUpload && handleDragOver(e, item.id)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => canUpload && handleDrop(e, item.id)}
-                      className={`flex items-center gap-3 rounded-2xl border p-4 transition-all duration-200 ${
-                        isApproved
-                          ? "border-success/30 bg-success/5"
-                          : isRejected
-                            ? "border-destructive/30 bg-destructive/5"
-                            : item.is_completed
-                              ? "border-success/30 bg-success/5"
-                              : dragOverItemId === item.id
-                                ? "border-primary bg-primary/5 ring-2 ring-primary/20 scale-[1.01]"
-                                : "border-border/60 bg-card shadow-sm hover:shadow-md"
-                      }`}
-                    >
-                      {isApproved ? (
-                        <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
-                      ) : isRejected ? (
-                        <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-                      ) : item.is_completed ? (
-                        <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
-                      ) : (
-                        <div className="h-5 w-5 shrink-0 rounded-full border-2 border-border" />
-                      )}
+              return (
+                <motion.div
+                  key={item.id}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: idx * 0.05 }}
+                  className={`relative group rounded-[2rem] border p-5 transition-all duration-300 ${
+                    isApproved ? "bg-success/5 border-success/30 opacity-80" :
+                    isRejected ? "bg-destructive/5 border-destructive/40 shadow-lg ring-1 ring-destructive/20" :
+                    "bg-card border-border/60 shadow-sm hover:shadow-md"
+                  }`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border-2 transition-colors ${
+                      isApproved ? "bg-success border-success text-white" :
+                      isRejected ? "bg-destructive border-destructive text-white" :
+                      isPending ? "bg-amber-100 border-amber-300 text-amber-600" :
+                      "border-muted bg-muted/30 text-muted-foreground"
+                    }`}>
+                      {isApproved ? <CheckCircle2 className="w-6 h-6" /> : 
+                       isRejected ? <AlertTriangle className="w-6 h-6" /> : 
+                       isPending ? <Clock className="w-5 h-5 animate-pulse" /> : 
+                       <span className="text-sm font-bold">{idx + 1}</span>}
+                    </div>
 
-                      <div className="flex-1 min-w-0">
-                        <span
-                          className={`text-sm font-semibold ${
-                            isApproved ? "text-success line-through opacity-70" :
-                            isRejected ? "text-destructive" :
-                            item.is_completed ? "text-success" :
-                            "text-card-foreground"
-                          }`}
-                        >
-                          {item.item_name}
-                        </span>
-                        {isRejected && rejectionReason && (
-                          <p className="text-xs font-medium text-destructive mt-1 bg-destructive/10 p-2 rounded-lg">
-                            Motivo da recusa: {rejectionReason}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Text input for text-type items */}
-                      {isTextItem && !item.is_completed && (
-                        <div className="flex gap-2 shrink-0 w-full max-w-[220px]">
-                          <Textarea
-                            placeholder="Digite sua resposta..."
-                            className="rounded-xl text-sm min-h-[40px] h-10 border-border/80 focus:border-primary"
-                            defaultValue={item.text_answer ?? ""}
-                            onBlur={async (e) => {
-                              const answer = e.target.value.trim();
-                              if (!answer) return;
-                              const { error } = await supabase
-                                .from("request_items")
-                                .update({ text_answer: answer, is_completed: true })
-                                .eq("id", item.id);
-                              if (error) { toast.error("Erro ao salvar resposta"); return; }
-                              toast.success("Resposta salva! ✅");
-                              refetchItems();
-                            }}
-                          />
+                    <div className="flex-1 min-w-0">
+                      <h4 className={`text-sm font-bold leading-tight ${isApproved ? 'text-success/70 line-through' : 'text-foreground'}`}>
+                        {item.item_name}
+                      </h4>
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">{item.stage_name}</p>
+                      
+                      {isRejected && upload?.rejection_reason && (
+                        <div className="mt-2 text-xs font-bold text-destructive bg-destructive/10 p-2 rounded-xl border border-destructive/20">
+                          ⚠️ Recusado: {upload.rejection_reason}
                         </div>
-                      )}
-                      {isTextItem && item.is_completed && item.text_answer && (
-                        <span className="text-xs font-bold text-success shrink-0 bg-success/10 px-3 py-1.5 rounded-full">✅ Salvo</span>
-                      )}
-
-                      {canUpload && !staged && !isUploading && processingItemId !== item.id && (
-                        <label className="shrink-0 cursor-pointer">
-                          <span
-                            className="relative inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
-                            style={brandColor ? { background: brandColor } : undefined}
-                          >
-                            {!brandColor && <span className="absolute inset-0 rounded-xl gradient-primary -z-0" />}
-                            <Upload className="h-4 w-4 relative z-10" />
-                            <span className="relative z-10 uppercase tracking-wide">{isRejected ? "Reenviar" : "Anexar"}</span>
-                          </span>
-                          <input
-                            type="file"
-                            className="hidden"
-                            accept=".jpg,.jpeg,.png,.webp,.pdf"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) stageFile(item.id, file);
-                              e.target.value = "";
-                            }}
-                          />
-                        </label>
-                      )}
-                      {processingItemId === item.id && (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0 bg-accent/50 px-3 py-1.5 rounded-xl">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Verificando...
-                        </span>
                       )}
                     </div>
 
-                    {/* File preview thumbnail */}
-                    {staged && (
-                      <FilePreviewThumbnail
-                        file={staged}
-                        onRemove={() => removeStagedFile(item.id)}
-                        onConfirm={() => confirmUpload(item.id)}
-                        isUploading={isUploading}
-                        uploadProgress={uploadProgress}
-                      />
+                    {!isApproved && !staged && !uploadingItemId && (
+                      <label className="cursor-pointer">
+                        <input type="file" className="hidden" onChange={e => {
+                          const f = e.target.files?.[0];
+                          if (f) validateAndProcessFile(f).then(res => res.valid && setStagedFiles(prev => ({...prev, [item.id]: res.processedFile!})));
+                        }} />
+                        <div className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wide transition-all ${
+                          isRejected ? 'bg-destructive text-white shadow-hero' : 'bg-primary text-white shadow-sm hover:shadow-glow'
+                        }`}>
+                          {isRejected ? "Reenviar" : "Anexar"}
+                        </div>
+                      </label>
                     )}
-                  </motion.div>
-                );
-              })}
+                  </div>
+
+                  {/* Preview do Arquivo Selecionado (Antes de Confirmar) */}
+                  {staged && (
+                    <div className="mt-4 pt-4 border-t border-dashed border-border/60">
+                       <FilePreviewThumbnail
+                         file={staged}
+                         onRemove={() => setStagedFiles(prev => { const n = {...prev}; delete n[item.id]; return n; })}
+                         onConfirm={() => confirmUpload(item.id)}
+                         isUploading={uploadingItemId === item.id}
+                         uploadProgress={uploadProgress}
+                       />
+                    </div>
+                  )}
+                  
+                  {isPending && !staged && (
+                    <div className="mt-2 text-[10px] font-bold text-amber-600 flex items-center gap-1 bg-amber-50 w-fit px-2 py-0.5 rounded-full">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Aguardando revisão do profissional...
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+
+        <div className="pt-8 text-center space-y-4">
+          <p className="text-[10px] text-muted-foreground/60 uppercase tracking-[0.2em]">
+            Ambiente Seguro & Criptografado 🔒
+          </p>
+          {plan?.show_watermark && (
+            <div className="text-xs text-muted-foreground/40">
+              Processado via <b>Portal Seguríssimo</b>
             </div>
-          </div>
-        ))}
-
-        {plan?.show_watermark && (
-          <div className="mt-8 text-center pt-6 border-t border-border/40">
-            <p className="text-xs text-muted-foreground/60">
-              Processo digital via <span className="font-bold">Portal Seguríssimo</span> ✨
-            </p>
-          </div>
-        )}
-
-        {/* PRO: Company footer with branding */}
-        {isPro && (company?.cnpj || company?.phone) && (
-          <div className="mt-4 text-center space-y-1 pt-6 border-t border-border/40">
-            {company.cnpj && <p className="text-xs font-medium text-muted-foreground">CNPJ: {company.cnpj}</p>}
-            {company.phone && <p className="text-xs font-medium text-muted-foreground">Suporte: {company.phone}</p>}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
