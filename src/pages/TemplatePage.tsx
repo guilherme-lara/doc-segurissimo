@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, Crown, FileText, Trash2, ArrowLeft, Type } from "lucide-react";
+import { Plus, Crown, FileText, Trash2, ArrowLeft, Type, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -58,11 +58,36 @@ const TemplatePage = () => {
   const [isOpen, setIsOpen] = useState(false);
   
   // Estado do formulário
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("");
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
   const [customItemStage, setCustomItemStage] = useState("");
   const [customItemName, setCustomItemName] = useState("");
   const [customItemType, setCustomItemType] = useState<"file" | "text">("file");
+
+  // Limpar formulário
+  const resetForm = () => {
+    setEditingTemplateId(null);
+    setTemplateName("");
+    setChecklistItems([]);
+    setCustomItemStage("");
+    setCustomItemName("");
+    setCustomItemType("file");
+  };
+
+  // Abrir modal para edição
+  const handleEdit = (template: any) => {
+    setEditingTemplateId(template.id);
+    setTemplateName(template.name);
+    setChecklistItems(
+      template.template_items.map((item: any) => ({
+        stageName: item.stage_name,
+        itemName: item.item_name,
+        itemType: item.item_type || "file",
+      }))
+    );
+    setIsOpen(true);
+  };
 
   // 1. Buscar a empresa do usuário logado e o plano
   const { data: companyData, isLoading: isLoadingCompany } = useQuery({
@@ -104,7 +129,6 @@ const TemplatePage = () => {
   const allAvailableItems = useMemo(() => {
     const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
 
-    // Itens padrão
     COMMON_DOCUMENTS.forEach(doc => {
       itemsMap.set(doc.label, { stageName: doc.stage, itemName: doc.label, itemType: "file" });
     });
@@ -115,7 +139,6 @@ const TemplatePage = () => {
       });
     });
 
-    // Itens dos templates já criados pelo usuário no banco
     if (templates) {
       templates.forEach((tpl: any) => {
         tpl.template_items?.forEach((tItem: any) => {
@@ -128,7 +151,6 @@ const TemplatePage = () => {
       });
     }
 
-    // Retorna ordenado alfabeticamente
     return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
   }, [templates]);
 
@@ -155,25 +177,48 @@ const TemplatePage = () => {
     }
     setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
     setCustomItemName("");
-    // Mantém o customItemStage preenchido para ele adicionar rápido vários na mesma categoria
   };
 
-  // 3. Salvar novo template
-  const createTemplate = useMutation({
+  // 3. Salvar (Criar ou Atualizar) Template
+  const saveTemplate = useMutation({
     mutationFn: async () => {
       if (!templateName) throw new Error("Dê um nome ao template");
       if (checklistItems.length === 0) throw new Error("Adicione pelo menos um item ao template");
 
-      const { data: template, error: templateError } = await supabase
-        .from("templates")
-        .insert({ company_id: companyId, name: templateName })
-        .select()
-        .single();
+      let currentTemplateId = editingTemplateId;
 
-      if (templateError) throw templateError;
+      if (editingTemplateId) {
+        // Atualiza o nome do template
+        const { error: updateError } = await supabase
+          .from("templates")
+          .update({ name: templateName, updated_at: new Date().toISOString() })
+          .eq("id", editingTemplateId);
+        
+        if (updateError) throw updateError;
 
+        // Limpa os itens antigos para reescrever
+        const { error: deleteItemsError } = await supabase
+          .from("template_items")
+          .delete()
+          .eq("template_id", editingTemplateId);
+          
+        if (deleteItemsError) throw deleteItemsError;
+        
+      } else {
+        // Cria um template novo
+        const { data: newTemplate, error: templateError } = await supabase
+          .from("templates")
+          .insert({ company_id: companyId, name: templateName })
+          .select()
+          .single();
+
+        if (templateError) throw templateError;
+        currentTemplateId = newTemplate.id;
+      }
+
+      // Insere os itens (seja na criação ou na atualização)
       const itemsToInsert = checklistItems.map((item, index) => ({
-        template_id: template.id,
+        template_id: currentTemplateId,
         item_name: item.itemName,
         stage_name: item.stageName,
         item_type: item.itemType,
@@ -187,15 +232,25 @@ const TemplatePage = () => {
       if (itemsError) throw itemsError;
     },
     onSuccess: () => {
-      toast.success("Template criado com sucesso!");
+      toast.success(editingTemplateId ? "Template atualizado com sucesso!" : "Template criado com sucesso!");
       setIsOpen(false);
-      setTemplateName("");
-      setChecklistItems([]);
-      setCustomItemStage("");
-      setCustomItemName("");
+      resetForm();
       queryClient.invalidateQueries({ queryKey: ["my-templates"] });
     },
     onError: (e: any) => toast.error(e.message)
+  });
+
+  // 4. Excluir Template
+  const deleteTemplate = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("templates").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Template excluído permanentemente 🗑️");
+      queryClient.invalidateQueries({ queryKey: ["my-templates"] });
+    },
+    onError: (e: any) => toast.error("Erro ao excluir", { description: e.message })
   });
 
   if (isLoadingCompany) return <div className="p-8">Carregando...</div>;
@@ -217,22 +272,29 @@ const TemplatePage = () => {
           <p className="text-muted-foreground mb-6 max-w-md mx-auto">
             Faça upgrade para o plano PRO e pare de digitar os mesmos documentos toda vez. Crie templates reutilizáveis para Abertura de Empresa, Imposto de Renda e muito mais.
           </p>
-          <Button size="lg" className="gradient-primary text-white">
-            Desbloquear PRO por R$ 49/mês
-          </Button>
+          <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer">
+            <Button size="lg" className="gradient-primary text-white">
+              Desbloquear PRO por R$ 49/mês
+            </Button>
+          </a>
         </div>
       ) : (
         <div>
           <div className="flex justify-between items-center mb-6">
             <p className="text-muted-foreground">Gerencie seus checklists padronizados.</p>
             
-            <Dialog open={isOpen} onOpenChange={setIsOpen}>
+            <Dialog open={isOpen} onOpenChange={(open) => {
+              setIsOpen(open);
+              if (!open) resetForm();
+            }}>
               <DialogTrigger asChild>
-                <Button className="gradient-primary"><Plus className="w-4 h-4 mr-2" /> Novo Template</Button>
+                <Button className="gradient-primary" onClick={resetForm}>
+                  <Plus className="w-4 h-4 mr-2" /> Novo Template
+                </Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl">
                 <DialogHeader>
-                  <DialogTitle>Criar Novo Template</DialogTitle>
+                  <DialogTitle>{editingTemplateId ? "Editar Template" : "Criar Novo Template"}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-6 py-4">
                   <div className="space-y-2">
@@ -322,28 +384,48 @@ const TemplatePage = () => {
                     )}
                   </div>
 
-                  <Button className="w-full rounded-xl h-11" onClick={() => createTemplate.mutate()} disabled={createTemplate.isPending || checklistItems.length === 0}>
-                    {createTemplate.isPending ? "Salvando..." : "Salvar Template ✨"}
+                  <Button className="w-full rounded-xl h-11" onClick={() => saveTemplate.mutate()} disabled={saveTemplate.isPending || checklistItems.length === 0}>
+                    {saveTemplate.isPending ? "Salvando..." : (editingTemplateId ? "Atualizar Template ✨" : "Salvar Template ✨")}
                   </Button>
                 </div>
               </DialogContent>
             </Dialog>
           </div>
 
-          {isLoadingTemplates ? <p>Carregando templates...</p> : (
+          {isLoadingTemplates ? (
+            <div className="flex justify-center py-12"><Loader2 className="animate-spin text-primary h-8 w-8" /></div>
+          ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {templates?.map((t: any) => (
-                <div key={t.id} className="p-5 rounded-xl border bg-card shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="p-2 bg-primary/10 text-primary rounded-lg"><FileText className="w-5 h-5" /></div>
-                    <h3 className="font-semibold text-lg truncate">{t.name}</h3>
+                <div key={t.id} className="p-5 rounded-xl border bg-card shadow-sm hover:shadow-md transition-shadow relative group">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-primary/10 text-primary rounded-lg"><FileText className="w-5 h-5" /></div>
+                      <h3 className="font-semibold text-lg truncate max-w-[180px]">{t.name}</h3>
+                    </div>
+                    {/* Botão de Excluir */}
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 h-8 w-8 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => {
+                        if (confirm(`Tem certeza que deseja excluir o template "${t.name}"?`)) {
+                          deleteTemplate.mutate(t.id);
+                        }
+                      }}
+                      disabled={deleteTemplate.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-4">{t.template_items?.length || 0} itens</p>
-                  <Button variant="secondary" className="w-full text-xs rounded-xl" onClick={() => toast.info("Edição em breve!")}>Editar Template</Button>
+                  <p className="text-sm text-muted-foreground mb-4">{t.template_items?.length || 0} itens no checklist</p>
+                  <Button variant="secondary" className="w-full text-xs rounded-xl" onClick={() => handleEdit(t)}>
+                    Editar Template
+                  </Button>
                 </div>
               ))}
               {templates?.length === 0 && (
-                <div className="col-span-full text-center py-12 text-muted-foreground border-2 border-dashed rounded-xl">
+                <div className="col-span-full text-center py-12 text-muted-foreground border-2 border-dashed rounded-xl bg-accent/20">
                   Nenhum template criado ainda.
                 </div>
               )}
