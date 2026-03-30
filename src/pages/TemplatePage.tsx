@@ -155,12 +155,20 @@ const TemplatePage = () => {
   }, [templates]);
 
   // ─── Funções de manipulação do checklist ───
+ // ─── Funções de manipulação do checklist (Com Validação Anti-Duplicidade) ───
+
+  // Função auxiliar para checar duplicidade ignorando espaços e maiúsculas/minúsculas
+  const isDuplicate = (newItemName: string) => {
+    const normalizedNew = newItemName.trim().toLowerCase();
+    return checklistItems.some(item => item.itemName.trim().toLowerCase() === normalizedNew);
+  };
+
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
-    if (checklistItems.some((i) => i.itemName === label)) {
-      toast.warning("Este item já está no seu template");
+    if (isDuplicate(label)) {
+      toast.warning(`O item "${label}" já está na lista!`);
       return;
     }
-    setChecklistItems([...checklistItems, { stageName: stage, itemName: label, itemType: type }]);
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: label.trim(), itemType: type }]);
   };
 
   const removeDocumentTag = (index: number) => {
@@ -170,15 +178,63 @@ const TemplatePage = () => {
   const addCustomItem = () => {
     const name = customItemName.trim();
     const stage = customItemStage.trim() || "Geral";
+    
     if (!name) return;
-    if (checklistItems.some((i) => i.itemName === name)) {
-      toast.warning("Documento já adicionado");
+    
+    if (isDuplicate(name)) {
+      toast.warning(`O documento "${name}" já foi adicionado!`);
       return;
     }
+    
     setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
     setCustomItemName("");
   };
 
+  const applyTemplate = (template: typeof TEMPLATES[number]) => {
+    const merged = [...checklistItems];
+    let addedCount = 0;
+
+    template.items.forEach((t) => {
+      const normalizedName = t.label.trim().toLowerCase();
+      if (!merged.some((m) => m.itemName.trim().toLowerCase() === normalizedName)) {
+        merged.push({ stageName: t.stage, itemName: t.label.trim(), itemType: "file" });
+        addedCount++;
+      }
+    });
+
+    setChecklistItems(merged);
+    
+    if (addedCount > 0) {
+      toast.success(`Template "${template.name}" aplicado 🎉`);
+    } else {
+      toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
+    }
+  };
+
+  const applyCustomTemplate = (template: any) => {
+    const merged = [...checklistItems];
+    let addedCount = 0;
+
+    template.template_items.forEach((t: any) => {
+      const normalizedName = t.item_name.trim().toLowerCase();
+      if (!merged.some((m) => m.itemName.trim().toLowerCase() === normalizedName)) {
+        merged.push({ 
+          stageName: t.stage_name, 
+          itemName: t.item_name.trim(), 
+          itemType: t.item_type || "file" 
+        });
+        addedCount++;
+      }
+    });
+
+    setChecklistItems(merged);
+    
+    if (addedCount > 0) {
+      toast.success(`Template "${template.name}" aplicado 🎉`);
+    } else {
+      toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
+    }
+  };
   // 3. Salvar (Criar ou Atualizar) Template
   const saveTemplate = useMutation({
     mutationFn: async () => {
