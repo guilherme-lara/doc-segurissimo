@@ -52,6 +52,22 @@ interface ChecklistItem {
   itemType: "file" | "text";
 }
 
+// ─── Função de Raio-X (Normalização) ───
+// Transforma "RG / CNH" ou "rg cnh" em "rgcnh" para comparação exata
+const normalizeForCheck = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/gi, '');
+
+// ─── O Faxineiro (Auto-Limpeza) ───
+// Remove itens duplicados de uma lista baseando-se no Raio-X
+const deduplicateItems = (items: ChecklistItem[]): ChecklistItem[] => {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = normalizeForCheck(item.itemName);
+    if (seen.has(key)) return false; // Se já viu esse osso, descarta o clone
+    seen.add(key);
+    return true;
+  });
+};
+
 const TemplatePage = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -75,17 +91,19 @@ const TemplatePage = () => {
     setCustomItemType("file");
   };
 
-  // Abrir modal para edição
+  // Abrir modal para edição (Com Auto-Limpeza!)
   const handleEdit = (template: any) => {
     setEditingTemplateId(template.id);
     setTemplateName(template.name);
-    setChecklistItems(
-      template.template_items.map((item: any) => ({
-        stageName: item.stage_name,
-        itemName: item.item_name,
-        itemType: item.item_type || "file",
-      }))
-    );
+    
+    // Mapeia os itens do banco e passa pelo FAXINEIRO antes de jogar na tela
+    const rawItems: ChecklistItem[] = template.template_items.map((item: any) => ({
+      stageName: item.stage_name,
+      itemName: item.item_name,
+      itemType: item.item_type || "file",
+    }));
+    
+    setChecklistItems(deduplicateItems(rawItems));
     setIsOpen(true);
   };
 
@@ -125,28 +143,24 @@ const TemplatePage = () => {
     enabled: !!companyId && isPro,
   });
 
-  // ─── Lógica para o Dropdown Inteligente de Itens ───
+  // ─── Lógica para o Dropdown Inteligente de Itens (Com Raio-X) ───
   const allAvailableItems = useMemo(() => {
     const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
 
-    COMMON_DOCUMENTS.forEach(doc => {
-      itemsMap.set(doc.label, { stageName: doc.stage, itemName: doc.label, itemType: "file" });
-    });
+    const addItem = (stage: string, name: string, type: "file" | "text") => {
+      const key = normalizeForCheck(name);
+      if (!itemsMap.has(key)) {
+        itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
+      }
+    };
 
-    TEMPLATES.forEach(tpl => {
-      tpl.items.forEach(item => {
-        itemsMap.set(item.label, { stageName: item.stage, itemName: item.label, itemType: "file" });
-      });
-    });
+    COMMON_DOCUMENTS.forEach(doc => addItem(doc.stage, doc.label, "file"));
+    TEMPLATES.forEach(tpl => tpl.items.forEach(item => addItem(item.stage, item.label, "file")));
 
     if (templates) {
       templates.forEach((tpl: any) => {
         tpl.template_items?.forEach((tItem: any) => {
-          itemsMap.set(tItem.item_name, { 
-            stageName: tItem.stage_name, 
-            itemName: tItem.item_name, 
-            itemType: tItem.item_type || "file" 
-          });
+          addItem(tItem.stage_name, tItem.item_name, tItem.item_type || "file");
         });
       });
     }
@@ -154,18 +168,15 @@ const TemplatePage = () => {
     return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
   }, [templates]);
 
-  // ─── Funções de manipulação do checklist ───
- // ─── Funções de manipulação do checklist (Com Validação Anti-Duplicidade) ───
-
-  // Função auxiliar para checar duplicidade ignorando espaços e maiúsculas/minúsculas
+  // ─── Funções de manipulação do checklist (Com Raio-X) ───
   const isDuplicate = (newItemName: string) => {
-    const normalizedNew = newItemName.trim().toLowerCase();
-    return checklistItems.some(item => item.itemName.trim().toLowerCase() === normalizedNew);
+    const normalizedNew = normalizeForCheck(newItemName);
+    return checklistItems.some(item => normalizeForCheck(item.itemName) === normalizedNew);
   };
 
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
     if (isDuplicate(label)) {
-      toast.warning(`O item "${label}" já está na lista!`);
+      toast.warning(`O item "${label}" já está no seu template!`);
       return;
     }
     setChecklistItems([...checklistItems, { stageName: stage, itemName: label.trim(), itemType: type }]);
@@ -180,7 +191,6 @@ const TemplatePage = () => {
     const stage = customItemStage.trim() || "Geral";
     
     if (!name) return;
-    
     if (isDuplicate(name)) {
       toast.warning(`O documento "${name}" já foi adicionado!`);
       return;
@@ -190,51 +200,6 @@ const TemplatePage = () => {
     setCustomItemName("");
   };
 
-  const applyTemplate = (template: typeof TEMPLATES[number]) => {
-    const merged = [...checklistItems];
-    let addedCount = 0;
-
-    template.items.forEach((t) => {
-      const normalizedName = t.label.trim().toLowerCase();
-      if (!merged.some((m) => m.itemName.trim().toLowerCase() === normalizedName)) {
-        merged.push({ stageName: t.stage, itemName: t.label.trim(), itemType: "file" });
-        addedCount++;
-      }
-    });
-
-    setChecklistItems(merged);
-    
-    if (addedCount > 0) {
-      toast.success(`Template "${template.name}" aplicado 🎉`);
-    } else {
-      toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
-    }
-  };
-
-  const applyCustomTemplate = (template: any) => {
-    const merged = [...checklistItems];
-    let addedCount = 0;
-
-    template.template_items.forEach((t: any) => {
-      const normalizedName = t.item_name.trim().toLowerCase();
-      if (!merged.some((m) => m.itemName.trim().toLowerCase() === normalizedName)) {
-        merged.push({ 
-          stageName: t.stage_name, 
-          itemName: t.item_name.trim(), 
-          itemType: t.item_type || "file" 
-        });
-        addedCount++;
-      }
-    });
-
-    setChecklistItems(merged);
-    
-    if (addedCount > 0) {
-      toast.success(`Template "${template.name}" aplicado 🎉`);
-    } else {
-      toast.info(`Todos os itens de "${template.name}" já estavam na lista.`);
-    }
-  };
   // 3. Salvar (Criar ou Atualizar) Template
   const saveTemplate = useMutation({
     mutationFn: async () => {
@@ -252,7 +217,7 @@ const TemplatePage = () => {
         
         if (updateError) throw updateError;
 
-        // Limpa os itens antigos para reescrever
+        // Limpa TODOS os itens antigos no banco
         const { error: deleteItemsError } = await supabase
           .from("template_items")
           .delete()
@@ -272,7 +237,7 @@ const TemplatePage = () => {
         currentTemplateId = newTemplate.id;
       }
 
-      // Insere os itens (seja na criação ou na atualização)
+      // Insere os itens limpos e atualizados de volta no banco
       const itemsToInsert = checklistItems.map((item, index) => ({
         template_id: currentTemplateId,
         item_name: item.itemName,
@@ -288,7 +253,7 @@ const TemplatePage = () => {
       if (itemsError) throw itemsError;
     },
     onSuccess: () => {
-      toast.success(editingTemplateId ? "Template atualizado com sucesso!" : "Template criado com sucesso!");
+      toast.success(editingTemplateId ? "Template limpo e atualizado com sucesso!" : "Template criado com sucesso!");
       setIsOpen(false);
       resetForm();
       queryClient.invalidateQueries({ queryKey: ["my-templates"] });
@@ -364,7 +329,7 @@ const TemplatePage = () => {
                     {/* DROPDOWN MÁGICO */}
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">Puxar do seu histórico de itens:</Label>
-                      <Select onValueChange={(val) => {
+                      <Select value="" onValueChange={(val) => {
                           const selected = allAvailableItems.find(i => i.itemName === val);
                           if (selected) {
                             addDocumentTag(selected.itemName, selected.stageName, selected.itemType);
