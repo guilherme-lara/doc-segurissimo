@@ -26,6 +26,7 @@ interface FilePreviewModalProps {
     file_size: number;
     content_type: string | null;
     status: string;
+    company_id?: string; // Adicionado para checar o ownCloud
     rejection_reason?: string | null;
     created_at: string;
   } | null;
@@ -73,50 +74,79 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
     if (!file) return;
     setUpdating(true);
     console.log("[approve] Approving file:", file.id, file.file_name);
+    
+    // 1. Atualiza o status no banco
     const { error } = await supabase
       .from("uploads")
       .update({ status: "approved", rejection_reason: null } as any)
       .eq("id", file.id);
-    setUpdating(false);
+      
     if (error) {
+      setUpdating(false);
       console.error("[approve] Error:", error.message);
       toast.error("Erro ao aprovar");
       return;
     }
-    console.log("[approve] ✅ File approved, triggering ownCloud sync...");
-    toast.success("Arquivo aprovado ✅");
 
-    // Trigger OwnCloud sync (PRO) — fire and forget
+    console.log("[approve] ✅ File approved!");
+    toast.success("Arquivo aprovado ✅");
+    
+    // 2. Atualiza a UI imediatamente (não espera o ownCloud)
+    onStatusChange?.();
+    setUpdating(false);
+    onOpenChange(false);
+
+    // 3. Verifica se a empresa tem ownCloud configurado ANTES de tentar sincronizar
     try {
+      // Pega o company_id do arquivo ou busca da sessão atual se não vier na prop
+      let companyId = file.company_id;
+      if (!companyId) {
+        const { data: companyData } = await supabase
+          .from("companies")
+          .select("id, owncloud_url")
+          .limit(1)
+          .single();
+        companyId = companyData?.id;
+      } else {
+        const { data: companyData } = await supabase
+          .from("companies")
+          .select("owncloud_url")
+          .eq("id", companyId)
+          .single();
+          
+        // Se a URL estiver vazia, encerra silenciosamente aqui (SEM ERROS)
+        if (!companyData?.owncloud_url) {
+          console.log("[owncloud-sync] ownCloud não configurado nesta empresa. Sincronização ignorada.");
+          return;
+        }
+      }
+
+      // 4. Dispara a Edge Function (agora com certeza de que o ownCloud está ativo)
       console.log("[owncloud-sync] Invoking edge function for upload:", file.id);
       const res = await supabase.functions.invoke("owncloud-sync", {
         body: { uploadId: file.id },
       });
+      
       if (res.error) {
         const errorDetail = typeof res.error === "object" && "message" in res.error
           ? (res.error as any).message
           : JSON.stringify(res.error);
         console.error("[owncloud-sync] ❌ Sync failed:", errorDetail);
+        
+        // Só avisa de erro se não for o de "não configurado" (fallback de segurança)
         if (res.data?.code !== "NOT_CONFIGURED") {
           toast.error("Erro ao sincronizar com ownCloud.", {
             description: errorDetail,
             duration: 8000,
           });
-        } else {
-          console.log("[owncloud-sync] ownCloud não configurado — ignorando sync");
         }
-      } else {
+      } else if (res.data?.success) {
         console.log("[owncloud-sync] ✅ Sync response:", res.data);
-        if (res.data?.success) {
-          toast.success("Arquivo sincronizado com ownCloud ☁️", { duration: 5000 });
-        }
+        toast.success("Arquivo sincronizado com ownCloud ☁️", { duration: 5000 });
       }
     } catch (syncErr: any) {
       console.error("[owncloud-sync] Edge function exception:", syncErr);
     }
-
-    onStatusChange?.();
-    onOpenChange(false);
   };
 
   const handleReject = async () => {
@@ -265,7 +295,8 @@ const FilePreviewModal = ({ open, onOpenChange, file, onStatusChange }: FilePrev
               onClick={handleApprove}
               disabled={updating || file?.status === "approved"}
             >
-              <CheckCircle2 className="mr-2 h-4 w-4 text-success" /> Aprovar
+              {updating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4 text-success" />} 
+              {updating ? "Aprovando..." : "Aprovar"}
             </Button>
             <Button
               variant="outline"
