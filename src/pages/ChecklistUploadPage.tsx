@@ -1,40 +1,10 @@
 /**
  * ChecklistUploadPage — Página pública de upload do cliente
- *
- * REGRAS DE RLS (Row Level Security) para upload público:
- * ─────────────────────────────────────────────────────────
- * O cliente final acessa esta página via link único (sem autenticação).
- *
- * 1. Storage bucket "uploads":
- *    - INSERT público: qualquer pessoa pode fazer upload de arquivos
- *    - SELECT/DELETE restrito ao owner da company (auth.uid())
- *
- * 2. Tabela public.uploads:
- *    - INSERT público (uploads_public_insert) → WITH CHECK (true)
- *    - SELECT/DELETE restrito ao owner da company
- *    - Trigger on_upload_audit_log cria entrada no audit_logs automaticamente
- *
- * 3. Tabela public.request_items:
- *    - SELECT público (request_items_public_read) → USING (true)
- *    - Trigger mark_item_completed_on_upload auto-marca is_completed
- *    - Trigger on_upload_rejected desmarca is_completed quando rejeitado
- *
- * 4. Tabela public.uploads:
- *    - rejection_reason TEXT: motivo da rejeição exibido ao cliente
- *    - status: 'pending' | 'approved' | 'rejected'
- *
- * 5. Tabela public.document_requests:
- *    - access_password TEXT (nullable): senha de acesso (PRO only)
- *
- * 6. White-label (PRO):
- *    - companies.logo_url, companies.primary_color, companies.cnpj, companies.phone
- *    - user_plans.show_watermark controla exibição da marca d'água
  */
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Type, Loader2 } from "lucide-react";
-import { useParams } from "react-router-dom";
-import { Progress } from "@/components/ui/progress";
+import { Shield, Upload, CheckCircle2, AlertTriangle, Lock, PartyPopper, Clock, Loader2, ArrowRight } from "lucide-react";
+import { useParams, Link } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -44,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
 import { validateAndProcessFile } from "@/lib/file-security";
 
@@ -81,7 +51,11 @@ const ChecklistUploadPage = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<Record<string, File>>({});
+  
+  // LGPD & Gate states
   const [lgpdAccepted, setLgpdAccepted] = useState(false);
+  const [gatePassed, setGatePassed] = useState(false);
+  const [clientIp, setClientIp] = useState<string | null>(null);
 
   // Password protection state
   const [passwordInput, setPasswordInput] = useState("");
@@ -99,6 +73,14 @@ const ChecklistUploadPage = () => {
       window.removeEventListener("dragover", preventDrop);
       window.removeEventListener("drop", preventDrop);
     };
+  }, []);
+
+  // Fetch Client IP automatically for LGPD audit
+  useEffect(() => {
+    fetch('https://api.ipify.org?format=json')
+      .then(res => res.json())
+      .then(data => setClientIp(data.ip))
+      .catch(() => setClientIp("IP_INDISPONIVEL"));
   }, []);
 
   // Fetch company
@@ -133,7 +115,7 @@ const ChecklistUploadPage = () => {
 
   const isPro = plan?.plan === "pro";
 
-  // Fetch document request (includes access_password)
+  // Fetch document request
   const { data: request, isLoading: requestLoading } = useQuery({
     queryKey: ["request", requestId],
     queryFn: async () => {
@@ -143,7 +125,6 @@ const ChecklistUploadPage = () => {
         .eq("id", requestId)
         .single();
       if (error) throw error;
-      console.log("[checklist] Request loaded:", { id: data.id, expires_at: data.expires_at, hasPassword: !!data.access_password });
       return data as DocumentRequest;
     },
     enabled: !!requestId,
@@ -159,13 +140,12 @@ const ChecklistUploadPage = () => {
         .eq("request_id", requestId)
         .order("sort_order", { ascending: true });
       if (error) throw error;
-      console.log("[checklist] Items loaded:", data?.length, "items");
       return data as RequestItem[];
     },
     enabled: !!requestId,
   });
 
-  // Fetch uploads filtered by this request's item IDs
+  // Fetch uploads
   const itemIds = useMemo(() => items?.map((i) => i.id) ?? [], [items]);
 
   const { data: uploads, refetch: refetchUploads } = useQuery({
@@ -182,7 +162,8 @@ const ChecklistUploadPage = () => {
     },
     enabled: itemIds.length > 0,
   });
-  // Realtime: listen for changes on request_items and uploads
+
+  // Realtime
   useEffect(() => {
     if (!requestId || !items || items.length === 0) return;
 
@@ -209,11 +190,9 @@ const ChecklistUploadPage = () => {
     return () => { supabase.removeChannel(channel); };
   }, [requestId, items?.length]);
 
-
   const uploadsByItem = useMemo(() => {
     const map: Record<string, UploadRecord> = {};
     if (!uploads) return map;
-    // latest first, so first match per item wins
     for (const u of uploads) {
       if (!map[u.request_item_id]) {
         map[u.request_item_id] = u;
@@ -225,7 +204,7 @@ const ChecklistUploadPage = () => {
   const isLoading = companyLoading || requestLoading || itemsLoading;
   const totalCount = items?.length ?? 0;
 
-  // Check all items approved (not just completed — must be approved)
+  // Check all approved
   const allApproved = useMemo(() => {
     if (!items || items.length === 0) return false;
     return items.every((item) => {
@@ -252,7 +231,6 @@ const ChecklistUploadPage = () => {
       return;
     }
 
-    // Zero Trust: validação + compressão
     setProcessingItemId(itemId);
     try {
       const result = await validateAndProcessFile(file);
@@ -284,10 +262,6 @@ const ChecklistUploadPage = () => {
   const confirmUpload = async (itemId: string) => {
     const file = stagedFiles[itemId];
     if (!file || !company || !request) return;
-    if (!lgpdAccepted) {
-      toast.warning("Aceite os termos LGPD antes de enviar.");
-      return;
-    }
 
     setUploadingItemId(itemId);
     setUploadProgress(10);
@@ -304,6 +278,7 @@ const ChecklistUploadPage = () => {
       if (storageError) throw new Error(`Falha no envio: ${storageError.message}`);
       setUploadProgress(60);
 
+      // Inserção no banco com a Auditoria LGPD inclusa!
       const { error: dbError } = await supabase.from("uploads").insert({
         request_item_id: itemId,
         company_id: company.id,
@@ -312,6 +287,7 @@ const ChecklistUploadPage = () => {
         file_path: filePath,
         content_type: file.type || "application/octet-stream",
         lgpd_consent: true,
+        uploader_ip: clientIp || "IP_NAO_CAPTURADO"
       } as any);
 
       if (dbError) throw new Error(`Falha ao registrar: ${dbError.message}`);
@@ -353,9 +329,8 @@ const ChecklistUploadPage = () => {
   }, [plan]);
 
   const brandColor = isPro ? company?.primary_color : undefined;
-
-  // Password gate
   const needsPassword = !!request?.access_password && !passwordVerified;
+  const isExpired = request?.expires_at ? new Date(request.expires_at) < new Date() : false;
 
   const verifyPassword = () => {
     if (passwordInput === request?.access_password) {
@@ -365,9 +340,6 @@ const ChecklistUploadPage = () => {
     }
   };
 
-  // Link expiration + countdown (hooks must be before early returns)
-  const isExpired = request?.expires_at ? new Date(request.expires_at) < new Date() : false;
-  
   const [countdown, setCountdown] = useState("");
   useEffect(() => {
     if (!request?.expires_at || isExpired) return;
@@ -385,6 +357,7 @@ const ChecklistUploadPage = () => {
     return () => clearInterval(interval);
   }, [request?.expires_at, isExpired]);
 
+  // Loading Screen
   if (isLoading) {
     return (
       <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
@@ -403,68 +376,47 @@ const ChecklistUploadPage = () => {
     );
   }
 
+  // Error Screens
   if (!requestId || !request) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex flex-col items-center gap-4 text-center max-w-sm"
-        >
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-4 text-center max-w-sm">
           <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
             <AlertTriangle className="h-8 w-8 text-destructive" />
           </div>
           <h2 className="text-xl font-bold text-foreground">Link inválido 😕</h2>
-          <p className="text-muted-foreground">
-            Solicite o link correto ao seu profissional para acessar esta página.
-          </p>
+          <p className="text-muted-foreground">Solicite o link correto ao seu profissional para acessar esta página.</p>
         </motion.div>
       </div>
     );
   }
 
   if (isExpired) {
-    console.log("[checklist] Link expired:", request.expires_at);
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex flex-col items-center gap-4 text-center max-w-sm"
-        >
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-4 text-center max-w-sm">
           <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-destructive/10">
             <Clock className="h-8 w-8 text-destructive" />
           </div>
           <h2 className="text-xl font-bold text-foreground">Link Expirado ⏰</h2>
-          <p className="text-muted-foreground">
-            Este link de envio de documentos expirou. Solicite um novo link ao seu profissional.
-          </p>
+          <p className="text-muted-foreground">Este link de envio de documentos expirou. Solicite um novo link ao seu profissional.</p>
         </motion.div>
       </div>
     );
   }
 
-  // Password protection screen
+  // Password Screen
   if (needsPassword) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex flex-col items-center gap-6 text-center max-w-sm w-full"
-        >
-          <div
-            className="flex h-16 w-16 items-center justify-center rounded-3xl shadow-hero"
-            style={brandColor ? { background: brandColor } : undefined}
-          >
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center gap-6 text-center max-w-sm w-full">
+          <div className="flex h-16 w-16 items-center justify-center rounded-3xl shadow-hero" style={brandColor ? { background: brandColor } : undefined}>
             {!brandColor && <div className="absolute inset-0 rounded-3xl gradient-primary" />}
             <Lock className="h-8 w-8 text-primary-foreground relative z-10" />
           </div>
           <div>
             <h2 className="text-xl font-bold text-foreground">Acesso Protegido 🔒</h2>
-            <p className="text-sm text-muted-foreground mt-2">
-              Digite a senha fornecida pelo profissional para acessar seus documentos.
-            </p>
+            <p className="text-sm text-muted-foreground mt-2">Digite a senha fornecida pelo profissional para acessar seus documentos.</p>
           </div>
           <div className="w-full space-y-3">
             <Input
@@ -488,119 +440,141 @@ const ChecklistUploadPage = () => {
     );
   }
 
-  // All approved → Success screen with confetti
+  // Success Screen
   if (allApproved) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ type: "spring", duration: 0.8 }}
-          className="flex flex-col items-center gap-6 text-center max-w-md"
-        >
-          <motion.div
-            initial={{ rotate: -10, scale: 0 }}
-            animate={{ rotate: 0, scale: 1 }}
-            transition={{ type: "spring", delay: 0.2, stiffness: 200 }}
-            className="flex h-24 w-24 items-center justify-center rounded-3xl bg-success/10"
-          >
+        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", duration: 0.8 }} className="flex flex-col items-center gap-6 text-center max-w-md">
+          <motion.div initial={{ rotate: -10, scale: 0 }} animate={{ rotate: 0, scale: 1 }} transition={{ type: "spring", delay: 0.2, stiffness: 200 }} className="flex h-24 w-24 items-center justify-center rounded-3xl bg-success/10">
             <PartyPopper className="h-12 w-12 text-success" />
           </motion.div>
           <div>
-            <motion.h2
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 }}
-              className="text-3xl font-bold text-foreground"
-            >
-              Parabéns! 🎉
-            </motion.h2>
-            <motion.p
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="mt-3 text-muted-foreground leading-relaxed"
-            >
+            <motion.h2 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="text-3xl font-bold text-foreground">Parabéns! 🎉</motion.h2>
+            <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }} className="mt-3 text-muted-foreground leading-relaxed">
               Todos os seus documentos foram <strong className="text-success">aprovados</strong> e o processo está em andamento.
             </motion.p>
           </div>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.8 }}
-            className="flex items-center gap-2 text-sm text-muted-foreground rounded-2xl bg-success/5 border border-success/20 px-5 py-3"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 }} className="flex items-center gap-2 text-sm text-muted-foreground rounded-2xl bg-success/5 border border-success/20 px-5 py-3">
             <CheckCircle2 className="h-5 w-5 text-success" />
             <span>{totalCount} documento{totalCount !== 1 ? "s" : ""} aprovado{totalCount !== 1 ? "s" : ""}</span>
           </motion.div>
-          {isPro && company?.display_name && (
-            <p className="text-xs text-muted-foreground mt-4">
-              {company.display_name}
-              {company.cnpj && ` · CNPJ: ${company.cnpj}`}
-            </p>
-          )}
         </motion.div>
       </div>
     );
   }
 
-  // Helper: get item status from uploads
   const getItemStatus = (itemId: string) => {
     const upload = uploadsByItem[itemId];
-    if (!upload) return "waiting"; // never uploaded
-    return upload.status; // pending, approved, rejected
+    if (!upload) return "waiting";
+    return upload.status;
   };
 
-  return (
-    <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
-      <div className="w-full max-w-lg">
-        {/* Header */}
+  // ──────────────────────────────────────────────────────────
+  // THE NEW LGPD GATE SCREEN 🛑
+  // ──────────────────────────────────────────────────────────
+  if (!gatePassed) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-8 flex flex-col items-center gap-3 text-center"
+          className="w-full max-w-md bg-card border border-border/60 rounded-3xl p-8 shadow-card flex flex-col items-center text-center"
         >
           {isPro && company?.logo_url ? (
-            <img src={company.logo_url} alt={company.display_name} className="h-12 w-12 rounded-2xl object-cover shadow-hero" />
+            <img src={company.logo_url} alt={company.display_name} className="h-16 w-16 rounded-2xl object-cover shadow-hero mb-4" />
           ) : (
             <div
-              className={`flex h-12 w-12 items-center justify-center rounded-2xl shadow-hero ${!brandColor ? 'gradient-primary' : ''}`}
+              className={`flex h-16 w-16 items-center justify-center rounded-2xl shadow-hero mb-4 ${!brandColor ? 'gradient-primary' : ''}`}
               style={brandColor ? { background: brandColor } : undefined}
             >
-              <Shield className="h-6 w-6 text-primary-foreground" />
+              <Shield className="h-8 w-8 text-primary-foreground" />
+            </div>
+          )}
+          
+          <h1 className="text-2xl font-bold text-foreground mb-1">{company?.display_name}</h1>
+          <p className="text-sm text-muted-foreground mb-6">
+            Documentos solicitados para <strong className="text-foreground">{request.client_name}</strong>
+          </p>
+
+          {request?.expires_at && countdown && (
+            <div className="mb-6 flex items-center justify-center gap-2 rounded-2xl border border-pro/30 bg-pro/5 px-4 py-2.5 text-sm w-full">
+              <Clock className="h-4 w-4 text-pro" />
+              <span className="text-muted-foreground">Expira em:</span>
+              <span className="font-mono font-semibold text-pro">{countdown}</span>
+            </div>
+          )}
+
+          <div className="w-full bg-accent/30 rounded-2xl p-5 border border-border/40 mb-6 text-left">
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="lgpd-consent-gate"
+                checked={lgpdAccepted}
+                onCheckedChange={(checked) => setLgpdAccepted(!!checked)}
+                className="mt-1"
+              />
+              <Label htmlFor="lgpd-consent-gate" className="text-sm text-muted-foreground leading-relaxed cursor-pointer">
+                Declaro que li e aceito os <Link to="/termos" target="_blank" className="text-primary font-medium hover:underline">Termos de Uso</Link> e a <Link to="/privacidade" target="_blank" className="text-primary font-medium hover:underline">Política de Privacidade</Link> (LGPD). 
+                Confirmo que os documentos enviados são autênticos e autorizo seu tratamento.
+              </Label>
+            </div>
+          </div>
+
+          <Button
+            onClick={() => setGatePassed(true)}
+            disabled={!lgpdAccepted}
+            className="w-full rounded-2xl h-12 text-base font-semibold shadow-hero hover:shadow-glow transition-all duration-300"
+            style={brandColor ? { background: brandColor, color: '#fff' } : undefined}
+          >
+            Acessar Checklist <ArrowRight className="ml-2 h-5 w-5" />
+          </Button>
+
+          <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <Shield className="h-3 w-3" />
+            <span>Portal protegido com criptografia ponta a ponta</span>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // CHECKLIST SCREEN (Only visible after Gate) ✅
+  // ──────────────────────────────────────────────────────────
+  return (
+    <div className="flex min-h-screen flex-col items-center bg-background px-4 py-12">
+      <div className="w-full max-w-lg">
+        {/* Header Compacto */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 flex items-center gap-4 bg-card border border-border/60 p-4 rounded-2xl shadow-sm"
+        >
+          {isPro && company?.logo_url ? (
+            <img src={company.logo_url} alt={company.display_name} className="h-10 w-10 rounded-xl object-cover" />
+          ) : (
+            <div
+              className={`flex h-10 w-10 items-center justify-center rounded-xl shrink-0 ${!brandColor ? 'gradient-primary' : ''}`}
+              style={brandColor ? { background: brandColor } : undefined}
+            >
+              <Shield className="h-5 w-5 text-primary-foreground" />
             </div>
           )}
           <div>
-            <h1 className="text-xl font-bold text-foreground">
-              {company?.display_name ?? "Carregando..."}
-            </h1>
-            {request && (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Documentos para <strong>{request.client_name}</strong>
-              </p>
-            )}
+            <h1 className="text-sm font-bold text-foreground leading-tight">{company?.display_name}</h1>
+            <p className="text-xs text-muted-foreground">Checklist de {request.client_name}</p>
           </div>
         </motion.div>
-
-        {/* Countdown timer for expiring links */}
-        {request?.expires_at && !isExpired && countdown && (
-          <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-pro/30 bg-pro/5 px-4 py-2.5 text-sm">
-            <Clock className="h-4 w-4 text-pro" />
-            <span className="text-muted-foreground">Expira em:</span>
-            <span className="font-mono font-semibold text-pro">{countdown}</span>
-          </div>
-        )}
 
         {/* Progress bar */}
         {totalCount > 0 && (
           <div className="mb-6 space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Progresso</span>
+              <span className="text-muted-foreground">Progresso Geral</span>
               <span className="font-medium text-foreground">
-                {completedCount} de {totalCount} ✅
+                {completedCount} de {totalCount} concluídos
               </span>
             </div>
-            <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+            <div className="relative h-2.5 rounded-full bg-accent overflow-hidden border border-border/40">
               <div
                 className={`h-full rounded-full transition-all duration-500 ${!brandColor ? 'gradient-primary' : ''}`}
                 style={{
@@ -614,11 +588,11 @@ const ChecklistUploadPage = () => {
 
         {/* Checklist by stage */}
         {Object.entries(stages).map(([stageName, stageItems]) => (
-          <div key={stageName} className="mb-6">
-            <h3 className="mb-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          <div key={stageName} className="mb-8">
+            <h3 className="mb-3 text-xs font-bold text-muted-foreground uppercase tracking-widest pl-1 border-l-2 border-primary">
               {stageName}
             </h3>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {stageItems.map((item, i) => {
                 const staged = stagedFiles[item.id];
                 const isUploading = uploadingItemId === item.id;
@@ -649,7 +623,7 @@ const ChecklistUploadPage = () => {
                               ? "border-success/30 bg-success/5"
                               : dragOverItemId === item.id
                                 ? "border-primary bg-primary/5 ring-2 ring-primary/20 scale-[1.01]"
-                                : "border-border/60 bg-card shadow-card hover:shadow-elevated"
+                                : "border-border/60 bg-card shadow-sm hover:shadow-md"
                       }`}
                     >
                       {isApproved ? (
@@ -664,8 +638,8 @@ const ChecklistUploadPage = () => {
 
                       <div className="flex-1 min-w-0">
                         <span
-                          className={`text-sm font-medium ${
-                            isApproved ? "text-success line-through" :
+                          className={`text-sm font-semibold ${
+                            isApproved ? "text-success line-through opacity-70" :
                             isRejected ? "text-destructive" :
                             item.is_completed ? "text-success" :
                             "text-card-foreground"
@@ -674,23 +648,22 @@ const ChecklistUploadPage = () => {
                           {item.item_name}
                         </span>
                         {isRejected && rejectionReason && (
-                          <p className="text-xs text-destructive/80 mt-1">
-                            ❌ {rejectionReason}
+                          <p className="text-xs font-medium text-destructive mt-1 bg-destructive/10 p-2 rounded-lg">
+                            Motivo da recusa: {rejectionReason}
                           </p>
                         )}
                       </div>
 
                       {/* Text input for text-type items */}
                       {isTextItem && !item.is_completed && (
-                        <div className="flex gap-2 shrink-0 w-full max-w-[200px]">
+                        <div className="flex gap-2 shrink-0 w-full max-w-[220px]">
                           <Textarea
                             placeholder="Digite sua resposta..."
-                            className="rounded-xl text-xs min-h-[36px] h-9"
+                            className="rounded-xl text-sm min-h-[40px] h-10 border-border/80 focus:border-primary"
                             defaultValue={item.text_answer ?? ""}
                             onBlur={async (e) => {
                               const answer = e.target.value.trim();
                               if (!answer) return;
-                              console.log("[checklist] Saving text answer for item:", item.id);
                               const { error } = await supabase
                                 .from("request_items")
                                 .update({ text_answer: answer, is_completed: true })
@@ -703,24 +676,23 @@ const ChecklistUploadPage = () => {
                         </div>
                       )}
                       {isTextItem && item.is_completed && item.text_answer && (
-                        <span className="text-xs text-success shrink-0">✅ Respondido</span>
+                        <span className="text-xs font-bold text-success shrink-0 bg-success/10 px-3 py-1.5 rounded-full">✅ Salvo</span>
                       )}
 
                       {canUpload && !staged && !isUploading && processingItemId !== item.id && (
-                        <label className={`shrink-0 ${lgpdAccepted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
+                        <label className="shrink-0 cursor-pointer">
                           <span
-                            className="relative inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
+                            className="relative inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold text-primary-foreground hover:shadow-glow transition-all duration-200 overflow-hidden"
                             style={brandColor ? { background: brandColor } : undefined}
                           >
                             {!brandColor && <span className="absolute inset-0 rounded-xl gradient-primary -z-0" />}
-                            <Upload className="h-3 w-3 relative z-10" />
-                            <span className="relative z-10">{isRejected ? "Reenviar" : "Enviar"}</span>
+                            <Upload className="h-4 w-4 relative z-10" />
+                            <span className="relative z-10 uppercase tracking-wide">{isRejected ? "Reenviar" : "Anexar"}</span>
                           </span>
                           <input
                             type="file"
                             className="hidden"
                             accept=".jpg,.jpeg,.png,.webp,.pdf"
-                            disabled={!lgpdAccepted}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) stageFile(item.id, file);
@@ -730,8 +702,8 @@ const ChecklistUploadPage = () => {
                         </label>
                       )}
                       {processingItemId === item.id && (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
-                          <Loader2 className="h-3 w-3 animate-spin" /> Processando...
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground shrink-0 bg-accent/50 px-3 py-1.5 rounded-xl">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Verificando...
                         </span>
                       )}
                     </div>
@@ -753,44 +725,21 @@ const ChecklistUploadPage = () => {
           </div>
         ))}
 
-        {/* LGPD Consent Checkbox */}
-        <div className="mt-6 rounded-2xl border border-border/60 bg-card p-4 shadow-card">
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="lgpd-consent"
-              checked={lgpdAccepted}
-              onCheckedChange={(checked) => setLgpdAccepted(!!checked)}
-              className="mt-0.5"
-            />
-            <Label htmlFor="lgpd-consent" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
-              Declaro que li e aceito os <span className="text-primary font-medium">Termos de Uso</span> e a{" "}
-              <span className="text-primary font-medium">Política de Privacidade</span> (LGPD). 
-              Confirmo que os documentos enviados são autênticos e autorizo seu tratamento.
-            </Label>
-          </div>
-        </div>
-
-
         {plan?.show_watermark && (
-          <div className="mt-6 text-center">
+          <div className="mt-8 text-center pt-6 border-t border-border/40">
             <p className="text-xs text-muted-foreground/60">
-              Feito via <span className="font-medium">Portal Seguríssimo</span> ✨
+              Processo digital via <span className="font-bold">Portal Seguríssimo</span> ✨
             </p>
           </div>
         )}
 
         {/* PRO: Company footer with branding */}
         {isPro && (company?.cnpj || company?.phone) && (
-          <div className="mt-4 text-center space-y-0.5">
-            {company.cnpj && <p className="text-xs text-muted-foreground">CNPJ: {company.cnpj}</p>}
-            {company.phone && <p className="text-xs text-muted-foreground">📞 {company.phone}</p>}
+          <div className="mt-4 text-center space-y-1 pt-6 border-t border-border/40">
+            {company.cnpj && <p className="text-xs font-medium text-muted-foreground">CNPJ: {company.cnpj}</p>}
+            {company.phone && <p className="text-xs font-medium text-muted-foreground">Suporte: {company.phone}</p>}
           </div>
         )}
-
-        <div className="mt-8 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-          <Shield className="h-3 w-3" />
-          <span>Transferência protegida com criptografia 🔒</span>
-        </div>
       </div>
     </div>
   );
