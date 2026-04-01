@@ -1233,6 +1233,32 @@ const DashboardPage = () => {
             )}
           </TabsContent>
 
+          {/* ─── Templates Tab ─── */}
+          <TabsContent value="templates">
+            {isPro ? (
+              <TemplatesTab companyId={company?.id} />
+            ) : (
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
+                <div className="mx-auto max-w-sm rounded-3xl border-2 border-primary/20 glass p-10 shadow-glow">
+                  <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl gradient-primary shadow-hero">
+                    <Crown className="h-10 w-10 text-primary-foreground" />
+                  </div>
+                  <h3 className="text-xl font-bold text-foreground mb-2">Templates Personalizados ✨</h3>
+                  <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+                    Crie kits de documentos reutilizáveis para agilizar seu fluxo de trabalho. Disponível exclusivamente no plano Pro.
+                  </p>
+                  <Button
+                    className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                    onClick={() => handleCheckout()}
+                    disabled={checkoutLoading}
+                  >
+                    {checkoutLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</> : <>Fazer Upgrade para Pro 🚀</>}
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </TabsContent>
+
           {/* ─── Settings Tab ─── */}
           <TabsContent value="settings">
             <div className="space-y-6">
