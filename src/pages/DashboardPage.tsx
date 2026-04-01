@@ -107,6 +107,7 @@ const DashboardPage = () => {
   const queryClient = useQueryClient();
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   // View mode & Filters
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
