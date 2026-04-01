@@ -56,6 +56,7 @@ import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 import KanbanView from "@/components/dashboard/KanbanView";
+import TemplatesTab from "@/components/dashboard/TemplatesTab";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 // ─── Pre-defined document tags ───
