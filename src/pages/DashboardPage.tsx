@@ -895,6 +895,9 @@ const DashboardPage = () => {
             <TabsTrigger value="files" className="rounded-xl">
               <FileText className="mr-2 h-4 w-4" /> Arquivos
             </TabsTrigger>
+            <TabsTrigger value="templates" className="rounded-xl">
+              <BookTemplate className="mr-2 h-4 w-4" /> Templates
+            </TabsTrigger>
             <TabsTrigger value="settings" className="rounded-xl">
               <Settings className="mr-2 h-4 w-4" /> Configurações
             </TabsTrigger>
