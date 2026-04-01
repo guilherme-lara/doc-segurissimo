@@ -46,7 +46,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
-import { validateAndProcessFile } from "@/lib/file-security";
+import { validateAndProcessFile, checkBlockedExtension } from "@/lib/file-security";
 
 interface RequestItem {
   id: string;
