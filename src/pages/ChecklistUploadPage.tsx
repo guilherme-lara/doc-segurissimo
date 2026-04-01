@@ -46,7 +46,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
-import { validateAndProcessFile } from "@/lib/file-security";
+import { validateAndProcessFile, checkBlockedExtension } from "@/lib/file-security";
 
 interface RequestItem {
   id: string;
@@ -246,6 +246,13 @@ const ChecklistUploadPage = () => {
   const [processingItemId, setProcessingItemId] = useState<string | null>(null);
 
   const stageFile = async (itemId: string, file: File) => {
+    // Zero Trust: blocklist global de extensões perigosas
+    const blockedMsg = checkBlockedExtension(file.name);
+    if (blockedMsg) {
+      toast.error("Formato de arquivo não permitido por motivos de segurança. 🚫", { description: blockedMsg, duration: 6000 });
+      return;
+    }
+
     const maxMb = plan?.max_file_size_mb ?? 50;
     if (file.size > maxMb * 1024 * 1024) {
       toast.error(`Arquivo muito grande`, { description: `Limite de ${maxMb}MB por arquivo.` });

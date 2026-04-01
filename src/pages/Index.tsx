@@ -1,7 +1,10 @@
-import { ArrowRight, FileCheck, Link as LinkIcon, FolderOpen, CheckCircle2, ChevronRight, Sparkles, Star, Shield, Crown, Zap, Clock, Lock } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, FileCheck, Link as LinkIcon, FolderOpen, CheckCircle2, ChevronRight, Sparkles, Star, Shield, Crown, Zap, Clock, Lock, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const fadeUp = {
@@ -49,6 +52,31 @@ const testimonials = [
 ];
 
 const Index = () => {
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+
+  const handleCheckout = async () => {
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
+      if (error || data?.error) {
+        // Fallback to WhatsApp if checkout not configured
+        if (data?.fallback_url) {
+          window.open(data.fallback_url, "_blank");
+        } else {
+          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
+        }
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err: any) {
+      toast.error("Erro ao processar pagamento");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background overflow-hidden">
       {/* Nav */}
@@ -294,11 +322,17 @@ const Index = () => {
                   </li>
                 ))}
               </ul>
-              <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer">
-                <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                  Assinar Pro via WhatsApp <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </a>
+              <Button
+                className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                onClick={handleCheckout}
+                disabled={checkoutLoading}
+              >
+                {checkoutLoading ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</>
+                ) : (
+                  <>Assinar Pro <ArrowRight className="ml-2 h-4 w-4" /></>
+                )}
+              </Button>
             </motion.div>
           </div>
         </div>

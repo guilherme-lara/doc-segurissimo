@@ -30,7 +30,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, BookTemplate
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +56,7 @@ import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import AuditLogTimeline from "@/components/dashboard/AuditLogTimeline";
 import KanbanView from "@/components/dashboard/KanbanView";
+import TemplatesTab from "@/components/dashboard/TemplatesTab";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 // ─── Pre-defined document tags ───
@@ -107,6 +108,7 @@ const DashboardPage = () => {
   const queryClient = useQueryClient();
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   // View mode & Filters
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
@@ -531,6 +533,28 @@ const DashboardPage = () => {
     navigate("/");
   };
 
+  const handleCheckout = async () => {
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
+      if (error || data?.error) {
+        if (data?.fallback_url) {
+          window.open(data.fallback_url, "_blank");
+        } else {
+          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
+        }
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err: any) {
+      toast.error("Erro ao processar pagamento");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
   const handleDownloadZip = useCallback(async (requestId: string, clientNameArg: string) => {
     setDownloadingZipId(requestId);
     try {
@@ -895,6 +919,9 @@ const DashboardPage = () => {
             <TabsTrigger value="files" className="rounded-xl">
               <FileText className="mr-2 h-4 w-4" /> Arquivos
             </TabsTrigger>
+            <TabsTrigger value="templates" className="rounded-xl">
+              <BookTemplate className="mr-2 h-4 w-4" /> Templates
+            </TabsTrigger>
             <TabsTrigger value="settings" className="rounded-xl">
               <Settings className="mr-2 h-4 w-4" /> Configurações
             </TabsTrigger>
@@ -1230,6 +1257,32 @@ const DashboardPage = () => {
             )}
           </TabsContent>
 
+          {/* ─── Templates Tab ─── */}
+          <TabsContent value="templates">
+            {isPro ? (
+              <TemplatesTab companyId={company?.id} />
+            ) : (
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
+                <div className="mx-auto max-w-sm rounded-3xl border-2 border-primary/20 glass p-10 shadow-glow">
+                  <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl gradient-primary shadow-hero">
+                    <Crown className="h-10 w-10 text-primary-foreground" />
+                  </div>
+                  <h3 className="text-xl font-bold text-foreground mb-2">Templates Personalizados ✨</h3>
+                  <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+                    Crie kits de documentos reutilizáveis para agilizar seu fluxo de trabalho. Disponível exclusivamente no plano Pro.
+                  </p>
+                  <Button
+                    className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                    onClick={() => handleCheckout()}
+                    disabled={checkoutLoading}
+                  >
+                    {checkoutLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</> : <>Fazer Upgrade para Pro 🚀</>}
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </TabsContent>
+
           {/* ─── Settings Tab ─── */}
           <TabsContent value="settings">
             <div className="space-y-6">
@@ -1442,11 +1495,13 @@ const DashboardPage = () => {
               <span className="text-3xl font-extrabold text-foreground">R$49</span>
               <span className="text-muted-foreground">/mês</span>
             </div>
-            <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer" className="w-full">
-              <Button className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
-                Fazer Upgrade Agora 🚀
-              </Button>
-            </a>
+            <Button
+              className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+              onClick={() => handleCheckout()}
+              disabled={checkoutLoading}
+            >
+              {checkoutLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</> : "Fazer Upgrade Agora 🚀"}
+            </Button>
             <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Agora não
             </button>

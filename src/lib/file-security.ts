@@ -19,6 +19,21 @@ const ALLOWED_TYPES = [
 
 const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".pdf"];
 
+// Blocklist global de extensões perigosas — Zero Trust
+const BLOCKED_EXTENSIONS = [".exe", ".bat", ".msi", ".sh", ".zip", ".rar", ".cmd", ".com", ".scr", ".pif", ".vbs", ".js", ".ws"];
+
+/**
+ * Verifica se o arquivo é de um tipo perigoso (blocklist)
+ * Retorna string de erro se bloqueado, null se OK
+ */
+export function checkBlockedExtension(fileName: string): string | null {
+  const ext = fileName.toLowerCase().substring(fileName.lastIndexOf("."));
+  if (BLOCKED_EXTENSIONS.includes(ext)) {
+    return `Formato de arquivo não permitido por motivos de segurança. Extensão "${ext}" bloqueada.`;
+  }
+  return null;
+}
+
 // Magic bytes para validação real do conteúdo
 const MAGIC_BYTES: Record<string, number[][]> = {
   "image/jpeg": [[0xff, 0xd8, 0xff]],
