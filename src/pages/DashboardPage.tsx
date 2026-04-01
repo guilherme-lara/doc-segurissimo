@@ -30,7 +30,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, BookTemplate
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
