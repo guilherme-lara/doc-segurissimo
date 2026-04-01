@@ -52,6 +52,31 @@ const testimonials = [
 ];
 
 const Index = () => {
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+
+  const handleCheckout = async () => {
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
+      if (error || data?.error) {
+        // Fallback to WhatsApp if checkout not configured
+        if (data?.fallback_url) {
+          window.open(data.fallback_url, "_blank");
+        } else {
+          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
+        }
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err: any) {
+      toast.error("Erro ao processar pagamento");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background overflow-hidden">
       {/* Nav */}
