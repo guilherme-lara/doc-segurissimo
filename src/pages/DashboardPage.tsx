@@ -445,6 +445,8 @@ const DashboardPage = () => {
         updateData.owncloud_url = owncloudUrl || null;
         updateData.owncloud_user = owncloudUser || null;
         updateData.owncloud_token = owncloudToken || null;
+        updateData.gdrive_client_id = gdriveClientId || null;
+        updateData.gdrive_client_secret = gdriveClientSecret || null;
       }
       const { error } = await supabase
         .from("companies")
