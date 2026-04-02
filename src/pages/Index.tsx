@@ -80,8 +80,19 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background overflow-hidden">
+      <Helmet>
+        <title>Seguríssimo — Plataforma Segura de Coleta de Documentos</title>
+        <meta name="description" content="Crie checklists inteligentes, envie links únicos e receba documentos organizados. A ferramenta que contadores, advogados e agências precisam." />
+        <meta name="keywords" content="coleta de documentos, checklist digital, envio seguro de arquivos, contadores, advogados, LGPD" />
+        <meta property="og:title" content="Seguríssimo — Pare de caçar documentos no WhatsApp" />
+        <meta property="og:description" content="Plataforma segura para profissionais receberem documentos de clientes de forma organizada." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://doc-segurissimo.lovable.app" />
+        <link rel="canonical" href="https://doc-segurissimo.lovable.app" />
+      </Helmet>
+
       {/* Nav */}
-      <nav className="glass sticky top-0 z-50 border-b border-border/40">
+      <header className="glass sticky top-0 z-50 border-b border-border/40">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl gradient-primary shadow-glow">
