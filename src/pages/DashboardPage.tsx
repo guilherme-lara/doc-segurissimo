@@ -159,6 +159,10 @@ const DashboardPage = () => {
   const [owncloudUser, setOwncloudUser] = useState("");
   const [owncloudToken, setOwncloudToken] = useState("");
 
+  // Google Drive config
+  const [gdriveClientId, setGdriveClientId] = useState("");
+  const [gdriveClientSecret, setGdriveClientSecret] = useState("");
+
   // Auth check
   const { data: session } = useQuery({
     queryKey: ["session"],
