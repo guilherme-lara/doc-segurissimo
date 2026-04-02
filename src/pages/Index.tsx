@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Helmet } from "react-helmet-async";
 import { ArrowRight, FileCheck, Link as LinkIcon, FolderOpen, CheckCircle2, ChevronRight, Sparkles, Star, Shield, Crown, Zap, Clock, Lock, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -79,8 +80,19 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background overflow-hidden">
+      <Helmet>
+        <title>Seguríssimo — Plataforma Segura de Coleta de Documentos</title>
+        <meta name="description" content="Crie checklists inteligentes, envie links únicos e receba documentos organizados. A ferramenta que contadores, advogados e agências precisam." />
+        <meta name="keywords" content="coleta de documentos, checklist digital, envio seguro de arquivos, contadores, advogados, LGPD" />
+        <meta property="og:title" content="Seguríssimo — Pare de caçar documentos no WhatsApp" />
+        <meta property="og:description" content="Plataforma segura para profissionais receberem documentos de clientes de forma organizada." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://doc-segurissimo.lovable.app" />
+        <link rel="canonical" href="https://doc-segurissimo.lovable.app" />
+      </Helmet>
+
       {/* Nav */}
-      <nav className="glass sticky top-0 z-50 border-b border-border/40">
+      <header className="glass sticky top-0 z-50 border-b border-border/40">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl gradient-primary shadow-glow">
@@ -102,9 +114,10 @@ const Index = () => {
             </Link>
           </div>
         </div>
-      </nav>
+      </header>
 
       {/* Hero */}
+      <main>
       <section className="relative">
         <div className="absolute inset-0 gradient-hero" />
         <div className="absolute top-20 left-10 h-72 w-72 rounded-full bg-primary/8 blur-3xl animate-pulse-soft" />
@@ -174,7 +187,7 @@ const Index = () => {
       </section>
 
       {/* Features */}
-      <section className="py-28 relative">
+      <section className="py-28 relative" aria-labelledby="features-heading">
         <div className="mx-auto max-w-6xl px-4">
           <motion.div
             className="text-center mb-16"
@@ -183,7 +196,7 @@ const Index = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
           >
-            <h2 className="text-3xl font-bold text-foreground md:text-4xl">Tudo que você precisa</h2>
+            <h2 id="features-heading" className="text-3xl font-bold text-foreground md:text-4xl">Tudo que você precisa</h2>
             <p className="mt-3 text-muted-foreground text-lg">Simplificado em uma plataforma moderna e segura.</p>
           </motion.div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
@@ -406,6 +419,7 @@ const Index = () => {
           </motion.div>
         </div>
       </section>
+      </main>
 
       {/* Footer */}
       <footer className="border-t border-border/40 py-8">

@@ -4,6 +4,17 @@
  * Placeholder para integração com InfinitePay.
  * Quando a API key for configurada, gera um link de checkout PRO.
  * Por enquanto retorna um erro informativo.
+ *
+ * ── SEGURANÇA DE WEBHOOKS ──
+ * Ao implementar o webhook de retorno do InfinitePay (POST /infinitepay-webhook),
+ * é OBRIGATÓRIO validar o cabeçalho de assinatura (ex: X-InfinitePay-Signature)
+ * comparando com HMAC-SHA256 do body usando o webhook secret compartilhado.
+ * Isso impede fraudes de injeção de status "paid" por terceiros.
+ *
+ * Exemplo de validação (a implementar no webhook handler):
+ *   const signature = req.headers.get("X-InfinitePay-Signature");
+ *   const expectedSig = crypto.subtle.sign("HMAC", key, body);
+ *   if (signature !== expectedSig) return new Response("Forbidden", { status: 403 });
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

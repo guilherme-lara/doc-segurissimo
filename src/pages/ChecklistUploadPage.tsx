@@ -253,9 +253,17 @@ const ChecklistUploadPage = () => {
       return;
     }
 
-    const maxMb = plan?.max_file_size_mb ?? 50;
-    if (file.size > maxMb * 1024 * 1024) {
-      toast.error(`Arquivo muito grande`, { description: `Limite de ${maxMb}MB por arquivo.` });
+    // Hard limit per plan: Free = 10MB, Pro = 50MB
+    const currentPlan = plan?.plan ?? "free";
+    const maxMb = currentPlan === "pro" ? 50 : 10;
+    const fileSizeMb = file.size / (1024 * 1024);
+    if (fileSizeMb > maxMb) {
+      toast.error(`Arquivo muito grande (${fileSizeMb.toFixed(1)}MB)`, {
+        description: currentPlan === "free"
+          ? `Limite de ${maxMb}MB no plano Grátis. Reduza o tamanho ou peça ao profissional para fazer upgrade.`
+          : `Limite de ${maxMb}MB por arquivo.`,
+        duration: 6000,
+      });
       return;
     }
 
