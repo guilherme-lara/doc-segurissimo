@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Helmet } from "react-helmet-async";
 import { ArrowRight, FileCheck, Link as LinkIcon, FolderOpen, CheckCircle2, ChevronRight, Sparkles, Star, Shield, Crown, Zap, Clock, Lock, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
