@@ -216,7 +216,6 @@ const Index = () => {
                 </div>
                 <h3 className="text-base font-semibold text-foreground">{f.title}</h3>
                 <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{f.description}</p>
-              </article>
               </motion.div>
             ))}
           </div>
