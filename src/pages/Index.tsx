@@ -210,6 +210,8 @@ const Index = () => {
                 whileHover={{ y: -6, transition: { duration: 0.2 } }}
                 className="rounded-3xl border border-border/40 glass p-7 hover:shadow-elevated transition-all duration-300 group"
               >
+              <article>
+              >
                 <div className={`mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br ${f.gradient} group-hover:scale-110 transition-transform`}>
                   <f.icon className="h-5 w-5 text-foreground" />
                 </div>
