@@ -1,0 +1,461 @@
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { Plus, Crown, FileText, Trash2, ArrowLeft, Type, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { useNavigate } from "react-router-dom";
+
+// ─── Documentos Padrão do Sistema ───
+const COMMON_DOCUMENTS = [
+  { label: "RG / CNH", stage: "Documentos Pessoais" },
+  { label: "CPF", stage: "Documentos Pessoais" },
+  { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
+  { label: "Contrato Social", stage: "Documentos Empresariais" },
+  { label: "Cartão CNPJ", stage: "Documentos Empresariais" },
+  { label: "Extrato Bancário", stage: "Documentos Financeiros" },
+  { label: "Holerite / Contracheque", stage: "Documentos Financeiros" },
+  { label: "Declaração de IR", stage: "Documentos Financeiros" },
+  { label: "Certidão de Casamento", stage: "Documentos Pessoais" },
+  { label: "Certidão de Nascimento", stage: "Documentos Pessoais" },
+];
+
+const TEMPLATES = [
+  {
+    name: "Kit Admissão",
+    items: [
+      { label: "RG / CNH", stage: "Documentos Pessoais" },
+      { label: "CPF", stage: "Documentos Pessoais" },
+      { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
+    ],
+  },
+  {
+    name: "Kit Abertura PJ",
+    items: [
+      { label: "RG / CNH", stage: "Documentos Pessoais" },
+      { label: "CPF", stage: "Documentos Pessoais" },
+      { label: "Comprovante de Residência", stage: "Documentos Pessoais" },
+      { label: "Contrato Social", stage: "Documentos Empresariais" },
+      { label: "Cartão CNPJ", stage: "Documentos Empresariais" },
+    ],
+  },
+];
+
+interface ChecklistItem {
+  stageName: string;
+  itemName: string;
+  itemType: "file" | "text";
+}
+
+// ─── Função de Raio-X (Normalização) ───
+// Transforma "RG / CNH" ou "rg cnh" em "rgcnh" para comparação exata
+const normalizeForCheck = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/gi, '');
+
+// ─── O Faxineiro (Auto-Limpeza) ───
+// Remove itens duplicados de uma lista baseando-se no Raio-X
+const deduplicateItems = (items: ChecklistItem[]): ChecklistItem[] => {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = normalizeForCheck(item.itemName);
+    if (seen.has(key)) return false; // Se já viu esse osso, descarta o clone
+    seen.add(key);
+    return true;
+  });
+};
+
+const TemplatePage = () => {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [isOpen, setIsOpen] = useState(false);
+  
+  // Estado do formulário
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState("");
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [customItemStage, setCustomItemStage] = useState("");
+  const [customItemName, setCustomItemName] = useState("");
+  const [customItemType, setCustomItemType] = useState<"file" | "text">("file");
+
+  // Limpar formulário
+  const resetForm = () => {
+    setEditingTemplateId(null);
+    setTemplateName("");
+    setChecklistItems([]);
+    setCustomItemStage("");
+    setCustomItemName("");
+    setCustomItemType("file");
+  };
+
+  // Abrir modal para edição (Com Auto-Limpeza!)
+  const handleEdit = (template: any) => {
+    setEditingTemplateId(template.id);
+    setTemplateName(template.name);
+    
+    // Mapeia os itens do banco e passa pelo FAXINEIRO antes de jogar na tela
+    const rawItems: ChecklistItem[] = template.template_items.map((item: any) => ({
+      stageName: item.stage_name,
+      itemName: item.item_name,
+      itemType: item.item_type || "file",
+    }));
+    
+    setChecklistItems(deduplicateItems(rawItems));
+    setIsOpen(true);
+  };
+
+  // 1. Buscar a empresa do usuário logado e o plano
+  const { data: companyData, isLoading: isLoadingCompany } = useQuery({
+    queryKey: ["my-company-plan"],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Não logado");
+
+      const { data: company } = await supabase
+        .from("companies")
+        .select("id, slug, user_plans(plan)")
+        .eq("user_id", user.id)
+        .single();
+        
+      return company;
+    }
+  });
+
+  const companyId = companyData?.id;
+  const isPro = (Array.isArray(companyData?.user_plans) ? companyData.user_plans[0]?.plan : companyData?.user_plans?.plan) === "pro";
+
+  // 2. Buscar os templates criados
+  const { data: templates, isLoading: isLoadingTemplates } = useQuery({
+    queryKey: ["my-templates", companyId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("templates")
+        .select("*, template_items(*)")
+        .eq("company_id", companyId)
+        .order("created_at", { ascending: false });
+      
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!companyId && isPro,
+  });
+
+  // ─── Lógica para o Dropdown Inteligente de Itens (Com Raio-X) ───
+  const allAvailableItems = useMemo(() => {
+    const itemsMap = new Map<string, { stageName: string; itemName: string; itemType: "file" | "text" }>();
+
+    const addItem = (stage: string, name: string, type: "file" | "text") => {
+      const key = normalizeForCheck(name);
+      if (!itemsMap.has(key)) {
+        itemsMap.set(key, { stageName: stage, itemName: name.trim(), itemType: type });
+      }
+    };
+
+    COMMON_DOCUMENTS.forEach(doc => addItem(doc.stage, doc.label, "file"));
+    TEMPLATES.forEach(tpl => tpl.items.forEach(item => addItem(item.stage, item.label, "file")));
+
+    if (templates) {
+      templates.forEach((tpl: any) => {
+        tpl.template_items?.forEach((tItem: any) => {
+          addItem(tItem.stage_name, tItem.item_name, tItem.item_type || "file");
+        });
+      });
+    }
+
+    return Array.from(itemsMap.values()).sort((a, b) => a.itemName.localeCompare(b.itemName));
+  }, [templates]);
+
+  // ─── Funções de manipulação do checklist (Com Raio-X) ───
+  const isDuplicate = (newItemName: string) => {
+    const normalizedNew = normalizeForCheck(newItemName);
+    return checklistItems.some(item => normalizeForCheck(item.itemName) === normalizedNew);
+  };
+
+  const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
+    if (isDuplicate(label)) {
+      toast.warning(`O item "${label}" já está no seu template!`);
+      return;
+    }
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: label.trim(), itemType: type }]);
+  };
+
+  const removeDocumentTag = (index: number) => {
+    setChecklistItems(checklistItems.filter((_, i) => i !== index));
+  };
+
+  const addCustomItem = () => {
+    const name = customItemName.trim();
+    const stage = customItemStage.trim() || "Geral";
+    
+    if (!name) return;
+    if (isDuplicate(name)) {
+      toast.warning(`O documento "${name}" já foi adicionado!`);
+      return;
+    }
+    
+    setChecklistItems([...checklistItems, { stageName: stage, itemName: name, itemType: customItemType }]);
+    setCustomItemName("");
+  };
+
+  // 3. Salvar (Criar ou Atualizar) Template
+  const saveTemplate = useMutation({
+    mutationFn: async () => {
+      if (!templateName) throw new Error("Dê um nome ao template");
+      if (checklistItems.length === 0) throw new Error("Adicione pelo menos um item ao template");
+
+      let currentTemplateId = editingTemplateId;
+
+      if (editingTemplateId) {
+        // Atualiza o nome do template
+        const { error: updateError } = await supabase
+          .from("templates")
+          .update({ name: templateName, updated_at: new Date().toISOString() })
+          .eq("id", editingTemplateId);
+        
+        if (updateError) throw updateError;
+
+        // Limpa TODOS os itens antigos no banco
+        const { error: deleteItemsError } = await supabase
+          .from("template_items")
+          .delete()
+          .eq("template_id", editingTemplateId);
+          
+        if (deleteItemsError) throw deleteItemsError;
+        
+      } else {
+        // Cria um template novo
+        const { data: newTemplate, error: templateError } = await supabase
+          .from("templates")
+          .insert({ company_id: companyId, name: templateName })
+          .select()
+          .single();
+
+        if (templateError) throw templateError;
+        currentTemplateId = newTemplate.id;
+      }
+
+      // Insere os itens limpos e atualizados de volta no banco
+      const itemsToInsert = checklistItems.map((item, index) => ({
+        template_id: currentTemplateId,
+        item_name: item.itemName,
+        stage_name: item.stageName,
+        item_type: item.itemType,
+        sort_order: index
+      }));
+
+      const { error: itemsError } = await supabase
+        .from("template_items")
+        .insert(itemsToInsert);
+
+      if (itemsError) throw itemsError;
+    },
+    onSuccess: () => {
+      toast.success(editingTemplateId ? "Template limpo e atualizado com sucesso!" : "Template criado com sucesso!");
+      setIsOpen(false);
+      resetForm();
+      queryClient.invalidateQueries({ queryKey: ["my-templates"] });
+    },
+    onError: (e: any) => toast.error(e.message)
+  });
+
+  // 4. Excluir Template
+  const deleteTemplate = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("templates").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Template excluído permanentemente 🗑️");
+      queryClient.invalidateQueries({ queryKey: ["my-templates"] });
+    },
+    onError: (e: any) => toast.error("Erro ao excluir", { description: e.message })
+  });
+
+  if (isLoadingCompany) return <div className="p-8">Carregando...</div>;
+
+  return (
+    <div className="max-w-5xl mx-auto p-6">
+      <div className="flex items-center gap-4 mb-8">
+        <Button variant="ghost" size="icon" onClick={() => navigate(`/${companyData?.slug}/dashboard`)}>
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <h1 className="text-3xl font-bold">Meus Templates</h1>
+      </div>
+
+      {!isPro ? (
+        <div className="bg-card border border-primary/20 rounded-2xl p-10 text-center shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-purple-500" />
+          <Crown className="h-16 w-16 mx-auto text-primary mb-4" />
+          <h2 className="text-2xl font-bold mb-2">Crie Checklists Automáticos</h2>
+          <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+            Faça upgrade para o plano PRO e pare de digitar os mesmos documentos toda vez. Crie templates reutilizáveis para Abertura de Empresa, Imposto de Renda e muito mais.
+          </p>
+          <a href="https://wa.me/5514991712801?text=Ol%C3%A1!%20Quero%20assinar%20o%20plano%20PRO%20do%20Portal%20Segur%C3%ADssimo!" target="_blank" rel="noopener noreferrer">
+            <Button size="lg" className="gradient-primary text-white">
+              Desbloquear PRO por R$ 49/mês
+            </Button>
+          </a>
+        </div>
+      ) : (
+        <div>
+          <div className="flex justify-between items-center mb-6">
+            <p className="text-muted-foreground">Gerencie seus checklists padronizados.</p>
+            
+            <Dialog open={isOpen} onOpenChange={(open) => {
+              setIsOpen(open);
+              if (!open) resetForm();
+            }}>
+              <DialogTrigger asChild>
+                <Button className="gradient-primary" onClick={resetForm}>
+                  <Plus className="w-4 h-4 mr-2" /> Novo Template
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl">
+                <DialogHeader>
+                  <DialogTitle>{editingTemplateId ? "Editar Template" : "Criar Novo Template"}</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-6 py-4">
+                  <div className="space-y-2">
+                    <Label>Nome do Template (ex: Abertura Simples Nacional)</Label>
+                    <Input value={templateName} onChange={e => setTemplateName(e.target.value)} placeholder="Digite o nome..." className="rounded-xl" />
+                  </div>
+
+                  <div className="space-y-4 pt-2">
+                    <Label className="text-base font-semibold border-b border-border/40 pb-2 flex block w-full">Adicionar Documentos</Label>
+                    
+                    {/* DROPDOWN MÁGICO */}
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Puxar do seu histórico de itens:</Label>
+                      <Select value="" onValueChange={(val) => {
+                          const selected = allAvailableItems.find(i => i.itemName === val);
+                          if (selected) {
+                            addDocumentTag(selected.itemName, selected.stageName, selected.itemType);
+                          }
+                        }}>
+                        <SelectTrigger className="w-full rounded-xl bg-accent/20">
+                          <SelectValue placeholder="Selecione um item salvo no banco..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allAvailableItems.map((item, idx) => (
+                            <SelectItem key={idx} value={item.itemName}>
+                              {item.itemType === "text" ? "📝" : "📎"} {item.itemName} <span className="text-muted-foreground ml-1">({item.stageName})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="h-px flex-1 bg-border/60" />
+                      <span className="text-[10px] text-muted-foreground font-semibold tracking-wider uppercase">OU CRIE UM ITEM INÉDITO</span>
+                      <div className="h-px flex-1 bg-border/60" />
+                    </div>
+
+                    {/* INPUTS PARA ITEM NOVO */}
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Categoria (ex: Financeiro)"
+                        value={customItemStage}
+                        onChange={(e) => setCustomItemStage(e.target.value)}
+                        className="rounded-xl w-[140px] shrink-0"
+                      />
+                      <Input
+                        placeholder={customItemType === "text" ? "Ex: Qual a cor da fachada?" : "Nome do documento..."}
+                        value={customItemName}
+                        onChange={(e) => setCustomItemName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCustomItem())}
+                        className="rounded-xl flex-1"
+                      />
+                      <Button
+                        variant={customItemType === "text" ? "default" : "outline"}
+                        size="icon"
+                        onClick={() => setCustomItemType(customItemType === "file" ? "text" : "file")}
+                        type="button"
+                        className="rounded-xl shrink-0"
+                        title={customItemType === "text" ? "Campo de texto" : "Upload de arquivo"}
+                      >
+                        {customItemType === "text" ? <Type className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                      </Button>
+                      <Button variant="outline" size="icon" onClick={addCustomItem} type="button" className="rounded-xl shrink-0">
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* CHECKLIST FINAL (BADGES) */}
+                  <div className="space-y-3 bg-accent/20 p-4 rounded-2xl border border-border/40 mt-4 min-h-[100px]">
+                    <Label>Itens do Template ({checklistItems.length})</Label>
+                    {checklistItems.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">Nenhum item adicionado ainda.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {checklistItems.map((item, i) => (
+                          <Badge key={i} variant="secondary" className="gap-1 pr-1.5 py-1 rounded-full text-xs font-medium bg-background border border-border/50">
+                            {item.itemType === "text" ? "📝" : "📎"} {item.itemName}
+                            <span className="text-[10px] text-muted-foreground ml-1">({item.stageName})</span>
+                            <button type="button" onClick={() => removeDocumentTag(i)} className="ml-1 rounded-full p-0.5 hover:bg-destructive hover:text-white transition-colors">
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <Button className="w-full rounded-xl h-11" onClick={() => saveTemplate.mutate()} disabled={saveTemplate.isPending || checklistItems.length === 0}>
+                    {saveTemplate.isPending ? "Salvando..." : (editingTemplateId ? "Atualizar Template ✨" : "Salvar Template ✨")}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+
+          {isLoadingTemplates ? (
+            <div className="flex justify-center py-12"><Loader2 className="animate-spin text-primary h-8 w-8" /></div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {templates?.map((t: any) => (
+                <div key={t.id} className="p-5 rounded-xl border bg-card shadow-sm hover:shadow-md transition-shadow relative group">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-primary/10 text-primary rounded-lg"><FileText className="w-5 h-5" /></div>
+                      <h3 className="font-semibold text-lg truncate max-w-[180px]">{t.name}</h3>
+                    </div>
+                    {/* Botão de Excluir */}
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 h-8 w-8 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => {
+                        if (confirm(`Tem certeza que deseja excluir o template "${t.name}"?`)) {
+                          deleteTemplate.mutate(t.id);
+                        }
+                      }}
+                      disabled={deleteTemplate.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-4">{t.template_items?.length || 0} itens no checklist</p>
+                  <Button variant="secondary" className="w-full text-xs rounded-xl" onClick={() => handleEdit(t)}>
+                    Editar Template
+                  </Button>
+                </div>
+              ))}
+              {templates?.length === 0 && (
+                <div className="col-span-full text-center py-12 text-muted-foreground border-2 border-dashed rounded-xl bg-accent/20">
+                  Nenhum template criado ainda.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TemplatePage;

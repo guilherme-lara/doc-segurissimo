@@ -216,7 +216,7 @@ const AdminDashboard = () => {
                 </TableRow>
               ) : (
                 filtered.map((c: any) => {
-                  const plan = c.user_plans?.[0]?.plan ?? "free";
+                  const plan = (Array.isArray(c.user_plans) ? c.user_plans[0]?.plan : c.user_plans?.plan) || "free";
                   return (
                     <TableRow key={c.id} className="group">
                       <TableCell className="font-medium">{c.display_name}</TableCell>
