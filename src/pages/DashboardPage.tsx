@@ -1396,30 +1396,63 @@ const DashboardPage = () => {
               <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
                 <div className="flex items-center gap-2 mb-4">
                   <Cloud className="h-4 w-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">Sincronização em Nuvem (ownCloud) ☁️</h3>
+                  <h3 className="text-sm font-semibold text-foreground">Sincronização em Nuvem ☁️</h3>
                   {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
                 </div>
                 <p className="text-xs text-muted-foreground mb-4">
-                  Configure seu servidor ownCloud para sincronizar automaticamente arquivos aprovados via WebDAV.
+                  Configure seu servidor de nuvem para sincronizar automaticamente arquivos aprovados.
                 </p>
-                <div className="space-y-4 max-w-md">
-                  <div className="space-y-2">
-                    <Label>URL do Servidor ownCloud</Label>
-                    <Input placeholder="https://cloud.seudominio.com.br" value={owncloudUrl} onChange={(e) => isPro ? setOwncloudUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+
+                {/* ownCloud Section */}
+                <div className="mb-6">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">ownCloud (WebDAV)</h4>
+                  <div className="space-y-4 max-w-md">
+                    <div className="space-y-2">
+                      <Label>URL do Servidor ownCloud</Label>
+                      <Input placeholder="https://cloud.seudominio.com.br" value={owncloudUrl} onChange={(e) => isPro ? setOwncloudUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Usuário</Label>
+                      <Input placeholder="admin" value={owncloudUser} onChange={(e) => isPro ? setOwncloudUser(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Senha / Token de Aplicativo</Label>
+                      <Input type="password" placeholder="Token de aplicativo..." value={owncloudToken} onChange={(e) => isPro ? setOwncloudToken(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    {isPro && owncloudUrl && (
+                      <p className="text-xs text-success flex items-center gap-1">
+                        <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label>Usuário</Label>
-                    <Input placeholder="admin" value={owncloudUser} onChange={(e) => isPro ? setOwncloudUser(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                </div>
+
+                {/* Google Drive Section */}
+                <div className="border-t border-border/40 pt-6">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Google Drive</h4>
+                  <div className="space-y-4 max-w-md">
+                    <div className="space-y-2">
+                      <Label>Client ID (OAuth)</Label>
+                      <Input placeholder="xxxx.apps.googleusercontent.com" value={gdriveClientId} onChange={(e) => isPro ? setGdriveClientId(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Client Secret</Label>
+                      <Input type="password" placeholder="GOCSPX-..." value={gdriveClientSecret} onChange={(e) => isPro ? setGdriveClientSecret(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      disabled={!isPro || !gdriveClientId || !gdriveClientSecret}
+                      onClick={() => toast.info("Autorização Google Drive em breve!", { description: "Esta funcionalidade será ativada na próxima atualização." })}
+                    >
+                      🔗 Autorizar Google Drive
+                    </Button>
+                    {isPro && gdriveClientId && gdriveClientSecret && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        Credenciais salvas. Clique em "Autorizar" para concluir a integração.
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label>Senha / Token de Aplicativo</Label>
-                    <Input type="password" placeholder="Token de aplicativo..." value={owncloudToken} onChange={(e) => isPro ? setOwncloudToken(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
-                  </div>
-                  {isPro && owncloudUrl && (
-                    <p className="text-xs text-success flex items-center gap-1">
-                      <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
-                    </p>
-                  )}
                 </div>
               </div>
 
