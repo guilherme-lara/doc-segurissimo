@@ -4,7 +4,8 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, BookTemplate
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, BookTemplate,
+  CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,21 +71,27 @@ const DashboardPage = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // --- UI & Global States ---
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-
-  // --- UI States ---
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
   const [showArchived, setShowArchived] = useState(false);
   const [manageRequestOpen, setManageRequestOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<{id: string, clientName: string} | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  
+  // Modals & Previews
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
+  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
+
+  // Filters
   const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
 
   // --- Form States ---
   const [clientName, setClientName] = useState("");
@@ -98,36 +105,19 @@ const DashboardPage = () => {
   const [linkExpiration, setLinkExpiration] = useState(false);
   const [expirationDays, setExpirationDays] = useState(7);
 
-  // Pro upgrade modal
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-
-  // Cloud sync modal (OwnCloud)
-  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
-
-  // File preview modal
-  const [previewFile, setPreviewFile] = useState<any>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-
-  // Files tab filter + search
-  const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
-  const [searchQuery, setSearchQuery] = useState("");
-
-  // Audit log panel
-  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
-
-  // Branding
+  // --- Settings & Branding ---
+  const [displayName, setDisplayName] = useState("");
+  const [slugValue, setSlugValue] = useState(slug || "");
   const [brandColor, setBrandColor] = useState("#7c3aed");
   const [logoUrl, setLogoUrl] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [phone, setPhone] = useState("");
   const [logoUploading, setLogoUploading] = useState(false);
 
-  // OwnCloud config
+  // Integrations
   const [owncloudUrl, setOwncloudUrl] = useState("");
   const [owncloudUser, setOwncloudUser] = useState("");
   const [owncloudToken, setOwncloudToken] = useState("");
-
-  // Google Drive config
   const [gdriveClientId, setGdriveClientId] = useState("");
   const [gdriveClientSecret, setGdriveClientSecret] = useState("");
 
@@ -160,6 +150,8 @@ const DashboardPage = () => {
 
   useEffect(() => {
     if (company) {
+      setDisplayName(company.display_name ?? "");
+      setSlugValue(company.slug ?? "");
       setBrandColor(company.primary_color ?? "#7c3aed");
       setLogoUrl(company.logo_url ?? "");
       setCnpj((company as any).cnpj ?? "");
@@ -183,7 +175,6 @@ const DashboardPage = () => {
   });
 
   const isPro = plan?.plan === "pro";
-  const owncloudUrl = (company as any)?.owncloud_url || "";
 
   const { data: requests, isLoading: requestsLoading } = useQuery({
     queryKey: ["requests", company?.id],
@@ -227,7 +218,12 @@ const DashboardPage = () => {
     return (uploads || []).filter((file: any) => {
       const matchesFilter = fileFilter === "all" || file.status === fileFilter;
       const q = searchQuery.toLowerCase();
-      return matchesFilter && (!q || file.file_name?.toLowerCase().includes(q) || file.request_items?.document_requests?.client_name?.toLowerCase().includes(q));
+      const matchesSearch = !q || 
+        file.file_name?.toLowerCase().includes(q) || 
+        file.request_items?.document_requests?.client_name?.toLowerCase().includes(q) ||
+        file.request_items?.item_name?.toLowerCase().includes(q);
+      
+      return matchesFilter && matchesSearch;
     });
   }, [uploads, fileFilter, searchQuery]);
 
@@ -243,6 +239,8 @@ const DashboardPage = () => {
     return Array.from(itemsMap.values()).sort((a: any, b: any) => a.itemName.localeCompare(b.itemName));
   }, [customTemplates]);
 
+  const visibleRequests = requests?.filter((r: any) => showArchived ? r.status === "archived" : r.status !== "archived") ?? [];
+
   // --- Handlers ---
   const addDocumentTag = (label: string, stage: string, type: "file" | "text" = "file") => {
     if (checklistItems.some(i => normalize(i.itemName) === normalize(label))) {
@@ -252,7 +250,6 @@ const DashboardPage = () => {
     setChecklistItems([...checklistItems, { stageName: stage || "Geral", itemName: label.trim(), itemType: type }]);
   };
 
-  // RESTAURANDO A FUNÇÃO QUE FALTAVA 🛠️
   const addCustomItem = () => {
     if (!customItemName.trim()) return;
     addDocumentTag(customItemName, customItemStage || "Geral", customItemType);
@@ -270,27 +267,13 @@ const DashboardPage = () => {
     toast.success("Template aplicado!");
   };
 
-  const handleDownloadZip = useCallback(async (requestId: string, name: string) => {
-    setDownloadingZipId(requestId);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.supabase.co/functions/v1/download-zip`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session?.access_token}`, "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
-        body: JSON.stringify({ requestId }),
-      });
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `${name}.zip`; a.click();
-      toast.success("Download iniciado! 📦");
-    } catch (err: any) { toast.error("Erro ao gerar ZIP"); } finally { setDownloadingZipId(null); }
-  }, []);
-
   const createRequest = useMutation({
     mutationFn: async () => {
       if (!company || !clientName.trim() || checklistItems.length === 0) throw new Error("Incompleto");
       const { data: req, error: reqErr } = await supabase.from("document_requests").insert({
-        company_id: company.id, client_name: clientName, client_email: clientEmail || null,
+        company_id: company.id, 
+        client_name: clientName, 
+        client_email: clientEmail || null,
         access_password: isPro && passwordProtect ? accessPassword : null,
         expires_at: isPro && linkExpiration ? new Date(Date.now() + expirationDays * 86400000).toISOString() : null
       }).select().single();
@@ -302,7 +285,8 @@ const DashboardPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["requests"] });
       setDialogOpen(false);
-      setClientName(""); setChecklistItems([]);
+      setClientName(""); setClientEmail(""); setChecklistItems([]);
+      setPasswordProtect(false); setAccessPassword(""); setLinkExpiration(false);
       toast.success("Solicitação criada! 🚀");
     }
   });
@@ -317,7 +301,6 @@ const DashboardPage = () => {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["requests"] }); setManageRequestOpen(false); toast.success("Excluído!"); }
   });
 
-  // Update settings
   const updateSettings = useMutation({
     mutationFn: async () => {
       if (!company) return;
@@ -336,10 +319,7 @@ const DashboardPage = () => {
         updateData.gdrive_client_id = gdriveClientId || null;
         updateData.gdrive_client_secret = gdriveClientSecret || null;
       }
-      const { error } = await supabase
-        .from("companies")
-        .update(updateData)
-        .eq("id", company.id);
+      const { error } = await supabase.from("companies").update(updateData).eq("id", company.id);
       if (error) throw error;
       if (slugValue !== slug) navigate(`/${slugValue}/dashboard`);
     },
@@ -348,108 +328,6 @@ const DashboardPage = () => {
       toast.success("Configurações salvas! ✅");
     },
   });
-
-  const handleCopy = (requestId: string) => {
-    const link = `${window.location.origin}/${slug}/enviar/${requestId}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(requestId);
-    toast.success("Link copiado! 📋");
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleMagicReminder = (req: any) => {
-    if (!isPro) {
-      setUpgradeModalOpen(true);
-      return;
-    }
-
-    const allItems = (req.request_items ?? []) as any[];
-    const requestUploads = (uploads ?? []).filter((u: any) =>
-      allItems.some((item: any) => item.id === u.request_item_id)
-    );
-
-    const pendingItems = allItems.filter((item: any) => {
-      if (item.item_type === "text" && item.is_completed) return false;
-      const itemUploads = requestUploads.filter((u: any) => u.request_item_id === item.id);
-      if (itemUploads.length === 0 && item.item_type !== "text") return true;
-      if (item.item_type === "text" && !item.is_completed) return true;
-      
-      const latestUpload = itemUploads.sort((a: any, b: any) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      )[0];
-      return latestUpload?.status === "rejected";
-    });
-
-    if (pendingItems.length === 0) {
-      toast.info("Todos os documentos já foram enviados! 🎉");
-      return;
-    }
-
-    const rejectedItems = pendingItems.filter((item: any) => {
-      const latestUpload = requestUploads
-        .filter((u: any) => u.request_item_id === item.id)
-        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-      return latestUpload?.status === "rejected";
-    });
-
-    const notSentItems = pendingItems.filter((item: any) => !rejectedItems.includes(item));
-
-    let docList = "";
-    if (notSentItems.length > 0) {
-      docList += notSentItems.map((item: any) => `📎 ${item.item_name}`).join("\n");
-    }
-    if (rejectedItems.length > 0) {
-      if (docList) docList += "\n\n";
-      docList += "⚠️ *Documentos que precisam ser reenviados:*\n";
-      docList += rejectedItems.map((item: any) => {
-        const latestUpload = requestUploads
-          .filter((u: any) => u.request_item_id === item.id)
-          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-        const reason = latestUpload?.rejection_reason ? ` (Motivo: ${latestUpload.rejection_reason})` : "";
-        return `🔄 ${item.item_name}${reason}`;
-      }).join("\n");
-    }
-
-    const link = `${window.location.origin}/${slug}/enviar/${req.id}`;
-    const message = `Olá, ${req.client_name}! 👋\n\nPassando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\n📲 Acesse seu link seguro para enviar:\n${link}\n\nQualquer dúvida, estou à disposição!`;
-    const encoded = encodeURIComponent(message);
-
-    const rawContact = (req.client_email ?? "").trim();
-    const digitsOnly = rawContact.replace(/\D/g, "");
-    const isPhone = digitsOnly.length >= 10 && !rawContact.includes("@");
-    const waUrl = isPhone
-      ? `https://wa.me/${digitsOnly}?text=${encoded}`
-      : `https://wa.me/?text=${encoded}`;
-
-    window.open(waUrl, "_blank");
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/");
-  };
-
-  const handleCheckout = async () => {
-    setCheckoutLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
-      if (error || data?.error) {
-        if (data?.fallback_url) {
-          window.open(data.fallback_url, "_blank");
-        } else {
-          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
-        }
-        return;
-      }
-      if (data?.url) {
-        window.location.href = data.url;
-      }
-    } catch (err: any) {
-      toast.error("Erro ao processar pagamento");
-    } finally {
-      setCheckoutLoading(false);
-    }
-  };
 
   const handleDownloadZip = useCallback(async (requestId: string, clientNameArg: string) => {
     setDownloadingZipId(requestId);
@@ -477,10 +355,7 @@ const DashboardPage = () => {
       if (!response.ok) {
         const errorBody = await response.text();
         let errorMsg = "Erro ao gerar ZIP";
-        try {
-          const parsed = JSON.parse(errorBody);
-          errorMsg = parsed.error || errorMsg;
-        } catch { /* not JSON */ }
+        try { const parsed = JSON.parse(errorBody); errorMsg = parsed.error || errorMsg; } catch { /* not JSON */ }
         toast.error(errorMsg);
         return;
       }
@@ -507,33 +382,27 @@ const DashboardPage = () => {
     }
   }, []);
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const handleCheckout = async () => {
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
+      if (error || data?.error) {
+        if (data?.fallback_url) {
+          window.open(data.fallback_url, "_blank");
+        } else {
+          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
+        }
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err: any) {
+      toast.error("Erro ao processar pagamento");
+    } finally {
+      setCheckoutLoading(false);
+    }
   };
-
-  const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
-
-  // Filter uploads
-  const filteredUploads = uploads?.filter((file: any) => {
-    const matchesFilter = fileFilter === "all" || file.status === fileFilter;
-    const query = searchQuery.toLowerCase();
-    const matchesSearch = !query ||
-      file.file_name?.toLowerCase().includes(query) ||
-      file.request_items?.document_requests?.client_name?.toLowerCase().includes(query) ||
-      file.request_items?.item_name?.toLowerCase().includes(query);
-    return matchesFilter && matchesSearch;
-  }) ?? [];
-
-  const uploadsByClient = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
-    const clientName = file.request_items?.document_requests?.client_name ?? "Sem cliente";
-    if (!acc[clientName]) acc[clientName] = [];
-    acc[clientName].push(file);
-    return acc;
-  }, {});
-
-  const visibleRequests = requests?.filter((r: any) => showArchived ? r.status === "archived" : r.status !== "archived") ?? [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -615,6 +484,63 @@ const DashboardPage = () => {
                       <Input placeholder="Estágio" value={customItemStage} onChange={e => setCustomItemStage(e.target.value)} className="rounded-xl text-xs" />
                       <Input placeholder="Nome do item..." value={customItemName} onChange={e => setCustomItemName(e.target.value)} className="rounded-xl text-xs" />
                       <Button variant="outline" size="icon" onClick={addCustomItem} className="rounded-xl shrink-0"><Plus className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+
+                  {/* SEÇÃO DE SEGURANÇA */}
+                  <div className="space-y-4 pt-4 border-t border-border/40 mt-4">
+                    <Label className="flex items-center gap-1.5 text-sm font-bold">
+                      <Shield className="h-4 w-4 text-primary" /> Segurança do Link
+                      {!isPro && <Badge variant="outline" className="text-[10px] border-pro/40 text-pro ml-2"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+                    </Label>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Expiração */}
+                      <div className="space-y-3 p-3 bg-accent/20 rounded-2xl border border-border/40 transition-all">
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="expiration" 
+                            checked={linkExpiration} 
+                            onCheckedChange={(c) => isPro ? setLinkExpiration(c as boolean) : setUpgradeModalOpen(true)} 
+                          />
+                          <Label htmlFor="expiration" className="text-xs cursor-pointer">Expirar link</Label>
+                        </div>
+                        {linkExpiration && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center gap-2">
+                            <Input 
+                              type="number" 
+                              min="1" 
+                              value={expirationDays} 
+                              onChange={e => setExpirationDays(parseInt(e.target.value) || 1)} 
+                              className="rounded-xl h-8 text-xs bg-background" 
+                            />
+                            <span className="text-xs text-muted-foreground">dias</span>
+                          </motion.div>
+                        )}
+                      </div>
+
+                      {/* Senha */}
+                      <div className="space-y-3 p-3 bg-accent/20 rounded-2xl border border-border/40 transition-all">
+                        <div className="flex items-center space-x-2">
+                          <Checkbox 
+                            id="password" 
+                            checked={passwordProtect} 
+                            onCheckedChange={(c) => isPro ? setPasswordProtect(c as boolean) : setUpgradeModalOpen(true)} 
+                          />
+                          <Label htmlFor="password" className="text-xs cursor-pointer">Proteger com senha</Label>
+                        </div>
+                        {passwordProtect && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
+                            <Input 
+                              type="text" 
+                              placeholder="Digite a senha..." 
+                              value={accessPassword} 
+                              onChange={e => setAccessPassword(e.target.value)} 
+                              className="rounded-xl h-8 text-xs bg-background" 
+                            />
+                          </motion.div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -710,7 +636,7 @@ const DashboardPage = () => {
                 <Table>
                   <TableHeader className="bg-muted/30"><TableRow><TableHead>Arquivo</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Data</TableHead></TableRow></TableHeader>
                   <TableBody>
-                    {(filteredUploads || []).map((file: any) => (
+                    {filteredUploads.map((file: any) => (
                       <TableRow key={file.id} className="cursor-pointer hover:bg-accent/40" onClick={() => { setPreviewFile(file); setPreviewOpen(true); }}>
                         <TableCell className="font-semibold text-sm">{file.file_name}</TableCell>
                         <TableCell><Badge variant="outline" className={`text-[10px] px-2 rounded-full font-bold ${file.status === 'approved' ? 'text-success border-success/30 bg-success/5' : file.status === 'rejected' ? 'text-destructive border-destructive/30 bg-destructive/5' : 'text-amber-600'}`}>{file.status?.toUpperCase()}</Badge></TableCell>
@@ -719,8 +645,7 @@ const DashboardPage = () => {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
-            )}
+             </div>
           </TabsContent>
 
           {/* ─── Templates Tab ─── */}
@@ -802,16 +727,12 @@ const DashboardPage = () => {
                             try {
                               const ext = file.name.split('.').pop();
                               const filePath = `${company.id}/logo.${ext}`;
-                              const { error: uploadError } = await supabase.storage
-                                .from("logos")
-                                .upload(filePath, file, { upsert: true });
+                              const { error: uploadError } = await supabase.storage.from("logos").upload(filePath, file, { upsert: true });
                               if (uploadError) throw uploadError;
                               const { data: urlData } = supabase.storage.from("logos").getPublicUrl(filePath);
-                              const publicUrl = urlData.publicUrl + "?t=" + Date.now();
-                              setLogoUrl(publicUrl);
+                              setLogoUrl(urlData.publicUrl + "?t=" + Date.now());
                               toast.success("Logo enviada! Salve as configurações para aplicar ✅");
                             } catch (err: any) {
-                              console.error("[logo-upload]", err);
                               toast.error("Erro ao enviar logo", { description: err.message });
                             } finally {
                               setLogoUploading(false);
@@ -879,7 +800,7 @@ const DashboardPage = () => {
                     </div>
                     {isPro && owncloudUrl && (
                       <p className="text-xs text-success flex items-center gap-1">
-                        <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
+                        <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados
                       </p>
                     )}
                   </div>
@@ -954,17 +875,6 @@ const DashboardPage = () => {
             <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Agora não
             </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Cloud Sync Modal - now shows OwnCloud info */}
-      <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
-        <DialogContent className="max-w-sm rounded-3xl text-center">
-          <div className="flex flex-col items-center gap-4 py-4">
-            <div className="h-16 w-16 rounded-3xl bg-accent flex items-center justify-center">
-              <Cloud className="h-8 w-8 text-accent-foreground" />
-            </div>
           </div>
         </DialogContent>
       </Dialog>
