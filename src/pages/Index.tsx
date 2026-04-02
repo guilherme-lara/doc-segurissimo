@@ -195,7 +195,7 @@ const Index = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
           >
-            <h2 className="text-3xl font-bold text-foreground md:text-4xl">Tudo que você precisa</h2>
+            <h2 id="features-heading" className="text-3xl font-bold text-foreground md:text-4xl">Tudo que você precisa</h2>
             <p className="mt-3 text-muted-foreground text-lg">Simplificado em uma plataforma moderna e segura.</p>
           </motion.div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
