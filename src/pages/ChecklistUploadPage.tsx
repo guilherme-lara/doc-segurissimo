@@ -14,6 +14,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
 import { validateAndProcessFile, checkBlockedExtension } from "@/lib/file-security";
 
+// Tipagem básica para não dar erro
+interface RequestItem {
+  id: string;
+  stage_name: string;
+  item_name: string;
+  is_completed: boolean;
+}
+
 const ChecklistUploadPage = () => {
   const { slug, requestId } = useParams<{ slug: string; requestId: string }>();
   const queryClient = useQueryClient();
@@ -74,29 +82,23 @@ const ChecklistUploadPage = () => {
     enabled: !!items?.length,
   });
 
-  // 2. REAL-TIME REFORÇADO ⚡
+  // 2. REAL-TIME
   useEffect(() => {
     if (!requestId) return;
 
-    // Escuta mudanças nos itens e nos uploads
     const channel = supabase.channel(`public-realtime-${requestId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "uploads" }, () => {
-        console.log("[Realtime] Upload detectado!");
         refetchUploads();
         refetchItems();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "request_items", filter: `request_id=eq.${requestId}` }, () => {
-        console.log("[Realtime] Status do item mudou!");
         refetchItems();
         refetchUploads();
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "document_requests", filter: `id=eq.${requestId}` }, () => {
-        console.log("[Realtime] Solicitação pai atualizada!");
         refetchRequest();
       })
-      .subscribe((status) => {
-        console.log("[Realtime] Status da conexão:", status);
-      });
+      .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, [requestId, refetchItems, refetchUploads, refetchRequest]);
@@ -108,53 +110,15 @@ const ChecklistUploadPage = () => {
     return map;
   }, [uploads]);
 
-  const isLoading = companyLoading || requestLoading || itemsLoading;
-  const totalCount = items?.length ?? 0;
-
-  // Check all items approved (not just completed — must be approved)
   const allApproved = useMemo(() => {
     if (!items || items.length === 0) return false;
-    return items.every((item) => {
-      const upload = uploadsByItem[item.id];
-      return upload?.status === "approved";
-    });
+    return items.every((item) => uploadsByItem[item.id]?.status === "approved");
   }, [items, uploadsByItem]);
 
-  const completedCount = items?.filter((i) => i.is_completed).length ?? 0;
-
-  // Group items by stage
-  const stages = items?.reduce<Record<string, RequestItem[]>>((acc, item) => {
-    if (!acc[item.stage_name]) acc[item.stage_name] = [];
-    acc[item.stage_name].push(item);
-    return acc;
-  }, {}) ?? {};
-
-  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
-
-  const stageFile = async (itemId: string, file: File) => {
-    // Zero Trust: blocklist global de extensões perigosas
-    const blockedMsg = checkBlockedExtension(file.name);
-    if (blockedMsg) {
-      toast.error("Formato de arquivo não permitido por motivos de segurança. 🚫", { description: blockedMsg, duration: 6000 });
-      return;
-    }
-
-    // Hard limit per plan: Free = 10MB, Pro = 50MB
-    const currentPlan = plan?.plan ?? "free";
-    const maxMb = currentPlan === "pro" ? 50 : 10;
-    const fileSizeMb = file.size / (1024 * 1024);
-    if (fileSizeMb > maxMb) {
-      toast.error(`Arquivo muito grande (${fileSizeMb.toFixed(1)}MB)`, {
-        description: currentPlan === "free"
-          ? `Limite de ${maxMb}MB no plano Grátis. Reduza o tamanho ou peça ao profissional para fazer upgrade.`
-          : `Limite de ${maxMb}MB por arquivo.`,
-        duration: 6000,
-      });
-      return;
-    }
-
-    // Zero Trust: validação + compressão
-    setProcessingItemId(itemId);
+  // --- CORREÇÃO DA FUNÇÃO DA LGPD AQUI ---
+  const handleLGPDAcceptance = async () => {
+    if (!request) return;
+    setIsAccepting(true);
     try {
       const { error } = await supabase
         .from("document_requests")
@@ -166,11 +130,39 @@ const ChecklistUploadPage = () => {
       
       if (error) throw error;
       await refetchRequest();
-      toast.success("Termos aceitos com sucesso!");
+      toast.success("Termos aceitos com sucesso! 🚀");
     } catch (err) {
       toast.error("Erro ao registrar aceite. Tente novamente.");
     } finally {
       setIsAccepting(false);
+    }
+  };
+
+  // Processamento do Arquivo no Input
+  const handleFileChange = async (itemId: string, file: File) => {
+    // 1. Zero Trust: Blocklist
+    const blockedMsg = checkBlockedExtension(file.name);
+    if (blockedMsg) {
+      toast.error("Formato não permitido 🚫", { description: blockedMsg });
+      return;
+    }
+
+    // 2. Hard Limits
+    const currentPlan = company?.plan ?? "free";
+    const maxMb = currentPlan === "pro" ? 50 : 10;
+    const fileSizeMb = file.size / (1024 * 1024);
+    
+    if (fileSizeMb > maxMb) {
+      toast.error(`Arquivo muito grande (${fileSizeMb.toFixed(1)}MB)`, {
+        description: `O limite é de ${maxMb}MB por arquivo.`,
+      });
+      return;
+    }
+
+    // 3. Validação e Processamento
+    const res = await validateAndProcessFile(file);
+    if (res.valid && res.processedFile) {
+      setStagedFiles(prev => ({ ...prev, [itemId]: res.processedFile! }));
     }
   };
 
@@ -181,27 +173,38 @@ const ChecklistUploadPage = () => {
     setUploadProgress(20);
     try {
       const filePath = `${company.id}/${request.id}/${itemId}/${Date.now()}_${file.name}`;
-      await supabase.storage.from("uploads").upload(filePath, file);
+      const { error: uploadError } = await supabase.storage.from("uploads").upload(filePath, file);
+      if (uploadError) throw uploadError;
+
       setUploadProgress(70);
-      await supabase.from("uploads").insert({
-        request_item_id: itemId, company_id: company.id, file_name: file.name,
-        file_size: file.size, file_path: filePath, content_type: file.type || "application/octet-stream",
-        lgpd_consent: true, uploader_ip: clientIp 
+      const { error: insertError } = await supabase.from("uploads").insert({
+        request_item_id: itemId, 
+        company_id: company.id, 
+        file_name: file.name,
+        file_size: file.size, 
+        file_path: filePath, 
+        content_type: file.type || "application/octet-stream",
+        lgpd_consent: true, 
+        uploader_ip: clientIp 
       } as any);
+
+      if (insertError) throw insertError;
+
       setUploadProgress(100);
-      toast.success("Enviado!");
+      toast.success("Documento enviado com sucesso! ✅");
+      
+      // Limpa o arquivo da tela
       setStagedFiles(prev => { const n = {...prev}; delete n[itemId]; return n; });
-      setUploadingItemId(null);
     } catch (err) { 
-      toast.error("Erro no upload"); 
-      setUploadingItemId(null); 
+      toast.error("Erro no upload", { description: "Tente novamente ou verifique sua conexão." }); 
+    } finally {
+      setUploadingItemId(null);
+      setUploadProgress(0);
     }
   };
 
-  const isPro = company?.plan === "pro" || true; // Ajuste conforme sua lógica de plano
   const needsPassword = !!request?.access_password && !passwordVerified;
   const hasAcceptedLGPD = !!request?.lgpd_accepted_at;
-  const allApproved = items?.length > 0 && items.every(item => uploadsByItem[item.id]?.status === "approved");
 
   if (companyLoading || requestLoading || itemsLoading) return <div className="p-20 text-center"><Loader2 className="animate-spin mx-auto h-10 w-10 text-primary" /></div>;
 
@@ -217,7 +220,7 @@ const ChecklistUploadPage = () => {
     </div>
   );
 
-  // TELA LGPD GATE (Só aparece se o banco não tiver data de aceite)
+  // TELA LGPD GATE
   if (!hasAcceptedLGPD && !allApproved) return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4 py-12">
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-md bg-card border border-border/60 rounded-[2.5rem] p-8 shadow-card text-center space-y-6">
@@ -313,7 +316,8 @@ const ChecklistUploadPage = () => {
                     <label className="cursor-pointer">
                       <input type="file" className="hidden" onChange={e => {
                         const f = e.target.files?.[0];
-                        if (f) validateAndProcessFile(f).then(res => res.valid && setStagedFiles(prev => ({...prev, [item.id]: res.processedFile!})));
+                        if (f) handleFileChange(item.id, f);
+                        e.target.value = ""; // Reseta o input para permitir selecionar o mesmo arquivo se ele errar
                       }} />
                       <div className={`px-4 py-2 rounded-xl text-xs font-bold ${isRejected ? 'bg-destructive text-white' : 'bg-primary text-white'}`}>
                         {isRejected ? "Reenviar" : "Anexar"}
@@ -322,8 +326,9 @@ const ChecklistUploadPage = () => {
                   )}
                 </div>
 
+                {/* Exibe o FilePreviewThumbnail apenas quando tem um arquivo preparado localmente */}
                 {staged && (
-                  <div className="mt-4 pt-4 border-t border-dashed">
+                  <div className="mt-4 pt-4 border-t border-dashed border-border/50">
                      <FilePreviewThumbnail
                        file={staged}
                        onRemove={() => setStagedFiles(prev => { const n = {...prev}; delete n[item.id]; return n; })}
@@ -333,7 +338,9 @@ const ChecklistUploadPage = () => {
                      />
                   </div>
                 )}
-                {isPending && !staged && <div className="mt-2 text-[10px] font-bold text-amber-600 italic">Aguardando conferência...</div>}
+                
+                {isPending && !staged && <div className="mt-4 pt-3 border-t border-amber-200/50 text-[11px] font-bold text-amber-600">⏳ Arquivo enviado. Aguardando conferência do escritório...</div>}
+                {isApproved && <div className="mt-4 pt-3 border-t border-success/20 text-[11px] font-bold text-success">✅ Arquivo validado!</div>}
               </motion.div>
             );
           })}
