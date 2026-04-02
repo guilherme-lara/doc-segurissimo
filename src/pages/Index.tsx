@@ -186,7 +186,7 @@ const Index = () => {
       </section>
 
       {/* Features */}
-      <section className="py-28 relative">
+      <section className="py-28 relative" aria-labelledby="features-heading">
         <div className="mx-auto max-w-6xl px-4">
           <motion.div
             className="text-center mb-16"
