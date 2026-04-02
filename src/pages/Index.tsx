@@ -114,10 +114,10 @@ const Index = () => {
             </Link>
           </div>
         </div>
-      </nav>
+      </header>
 
       {/* Hero */}
-      <section className="relative">
+      <main>
         <div className="absolute inset-0 gradient-hero" />
         <div className="absolute top-20 left-10 h-72 w-72 rounded-full bg-primary/8 blur-3xl animate-pulse-soft" />
         <div className="absolute bottom-10 right-10 h-96 w-96 rounded-full bg-primary/5 blur-3xl animate-pulse-soft" style={{ animationDelay: "1s" }} />
