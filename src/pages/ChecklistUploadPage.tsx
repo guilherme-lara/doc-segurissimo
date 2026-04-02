@@ -12,7 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import FilePreviewThumbnail from "@/components/checklist/FilePreviewThumbnail";
-import { validateAndProcessFile } from "@/lib/file-security";
+import { validateAndProcessFile, checkBlockedExtension } from "@/lib/file-security";
 
 const ChecklistUploadPage = () => {
   const { slug, requestId } = useParams<{ slug: string; requestId: string }>();
@@ -108,10 +108,53 @@ const ChecklistUploadPage = () => {
     return map;
   }, [uploads]);
 
-  // 4. Handlers
-  const handleLGPDAcceptance = async () => {
-    if (!lgpdAccepted || !request) return;
-    setIsAccepting(true);
+  const isLoading = companyLoading || requestLoading || itemsLoading;
+  const totalCount = items?.length ?? 0;
+
+  // Check all items approved (not just completed — must be approved)
+  const allApproved = useMemo(() => {
+    if (!items || items.length === 0) return false;
+    return items.every((item) => {
+      const upload = uploadsByItem[item.id];
+      return upload?.status === "approved";
+    });
+  }, [items, uploadsByItem]);
+
+  const completedCount = items?.filter((i) => i.is_completed).length ?? 0;
+
+  // Group items by stage
+  const stages = items?.reduce<Record<string, RequestItem[]>>((acc, item) => {
+    if (!acc[item.stage_name]) acc[item.stage_name] = [];
+    acc[item.stage_name].push(item);
+    return acc;
+  }, {}) ?? {};
+
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
+
+  const stageFile = async (itemId: string, file: File) => {
+    // Zero Trust: blocklist global de extensões perigosas
+    const blockedMsg = checkBlockedExtension(file.name);
+    if (blockedMsg) {
+      toast.error("Formato de arquivo não permitido por motivos de segurança. 🚫", { description: blockedMsg, duration: 6000 });
+      return;
+    }
+
+    // Hard limit per plan: Free = 10MB, Pro = 50MB
+    const currentPlan = plan?.plan ?? "free";
+    const maxMb = currentPlan === "pro" ? 50 : 10;
+    const fileSizeMb = file.size / (1024 * 1024);
+    if (fileSizeMb > maxMb) {
+      toast.error(`Arquivo muito grande (${fileSizeMb.toFixed(1)}MB)`, {
+        description: currentPlan === "free"
+          ? `Limite de ${maxMb}MB no plano Grátis. Reduza o tamanho ou peça ao profissional para fazer upgrade.`
+          : `Limite de ${maxMb}MB por arquivo.`,
+        duration: 6000,
+      });
+      return;
+    }
+
+    // Zero Trust: validação + compressão
+    setProcessingItemId(itemId);
     try {
       const { error } = await supabase
         .from("document_requests")

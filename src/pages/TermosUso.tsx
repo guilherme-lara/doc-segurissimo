@@ -1,10 +1,16 @@
 import React from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
 export default function Terms() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 relative overflow-hidden selection:bg-indigo-500/30">
+      <Helmet>
+        <title>Termos de Uso — Seguríssimo</title>
+        <meta name="description" content="Termos de Uso da plataforma Seguríssimo para coleta segura de documentos." />
+        <link rel="canonical" href="https://doc-segurissimo.lovable.app/termos" />
+      </Helmet>
       {/* Efeito Glow de fundo */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-500/10 dark:bg-indigo-500/20 blur-[120px] rounded-full pointer-events-none" />
 

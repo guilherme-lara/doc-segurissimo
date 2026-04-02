@@ -4,7 +4,7 @@ import {
   Shield, Copy, Check, Download, FileText, Settings, LogOut,
   Link as LinkIcon, Plus, Trash2, Tag, Sparkles, Crown, Lock as LockIcon,
   Search, Cloud, Palette, Filter, MessageCircle, Phone, Building2,
-  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, CheckCircle2
+  Archive, Loader2, LayoutList, Kanban, Clock, Type, Upload, AlertTriangle, BookTemplate
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ import { motion } from "framer-motion";
 import FilePreviewModal from "@/components/dashboard/FilePreviewModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import KanbanView from "@/components/dashboard/KanbanView";
+import TemplatesTab from "@/components/dashboard/TemplatesTab";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const COMMON_DOCUMENTS = [
@@ -69,6 +70,9 @@ const DashboardPage = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [downloadingZipId, setDownloadingZipId] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   // --- UI States ---
   const [viewMode, setViewMode] = useState<"list" | "kanban">("list");
@@ -94,7 +98,56 @@ const DashboardPage = () => {
   const [linkExpiration, setLinkExpiration] = useState(false);
   const [expirationDays, setExpirationDays] = useState(7);
 
-  // --- Data Fetching ---
+  // Pro upgrade modal
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+
+  // Cloud sync modal (OwnCloud)
+  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
+
+  // File preview modal
+  const [previewFile, setPreviewFile] = useState<any>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Files tab filter + search
+  const [fileFilter, setFileFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Audit log panel
+  const [auditRequestId, setAuditRequestId] = useState<string | null>(null);
+
+  // Branding
+  const [brandColor, setBrandColor] = useState("#7c3aed");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [cnpj, setCnpj] = useState("");
+  const [phone, setPhone] = useState("");
+  const [logoUploading, setLogoUploading] = useState(false);
+
+  // OwnCloud config
+  const [owncloudUrl, setOwncloudUrl] = useState("");
+  const [owncloudUser, setOwncloudUser] = useState("");
+  const [owncloudToken, setOwncloudToken] = useState("");
+
+  // Google Drive config
+  const [gdriveClientId, setGdriveClientId] = useState("");
+  const [gdriveClientSecret, setGdriveClientSecret] = useState("");
+
+  // Auth check
+  const { data: session } = useQuery({
+    queryKey: ["session"],
+    queryFn: async () => {
+      const { data } = await supabase.auth.getSession();
+      return data.session;
+    },
+  });
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) navigate("/auth/login");
+    });
+    return () => subscription.unsubscribe();
+  }, [navigate]);
+
+  // Fetch company
   const { data: company, isLoading: companyLoading } = useQuery({
     queryKey: ["company", slug],
     queryFn: async () => {
@@ -105,6 +158,21 @@ const DashboardPage = () => {
     enabled: !!slug,
   });
 
+  useEffect(() => {
+    if (company) {
+      setBrandColor(company.primary_color ?? "#7c3aed");
+      setLogoUrl(company.logo_url ?? "");
+      setCnpj((company as any).cnpj ?? "");
+      setPhone((company as any).phone ?? "");
+      setOwncloudUrl((company as any).owncloud_url ?? "");
+      setOwncloudUser((company as any).owncloud_user ?? "");
+      setOwncloudToken((company as any).owncloud_token ?? "");
+      setGdriveClientId((company as any).gdrive_client_id ?? "");
+      setGdriveClientSecret((company as any).gdrive_client_secret ?? "");
+    }
+  }, [company]);
+
+  // Fetch plan
   const { data: plan } = useQuery({
     queryKey: ["plan", company?.id],
     queryFn: async () => {
@@ -249,20 +317,221 @@ const DashboardPage = () => {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["requests"] }); setManageRequestOpen(false); toast.success("Excluído!"); }
   });
 
-  // --- Realtime ---
-  useEffect(() => {
-    if (!company?.id) return;
-    const channel = supabase.channel(`dash-rt-${company.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "uploads", filter: `company_id=eq.${company.id}` }, () => {
-        queryClient.invalidateQueries({ queryKey: ["uploads"] });
-        queryClient.invalidateQueries({ queryKey: ["requests"] });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "request_items" }, () => {
-        queryClient.invalidateQueries({ queryKey: ["requests"] });
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [company?.id, queryClient]);
+  // Update settings
+  const updateSettings = useMutation({
+    mutationFn: async () => {
+      if (!company) return;
+      const updateData: any = {
+        display_name: displayName,
+        slug: slugValue,
+        primary_color: brandColor,
+        logo_url: logoUrl || null,
+        cnpj: cnpj || null,
+        phone: phone || null,
+      };
+      if (isPro) {
+        updateData.owncloud_url = owncloudUrl || null;
+        updateData.owncloud_user = owncloudUser || null;
+        updateData.owncloud_token = owncloudToken || null;
+        updateData.gdrive_client_id = gdriveClientId || null;
+        updateData.gdrive_client_secret = gdriveClientSecret || null;
+      }
+      const { error } = await supabase
+        .from("companies")
+        .update(updateData)
+        .eq("id", company.id);
+      if (error) throw error;
+      if (slugValue !== slug) navigate(`/${slugValue}/dashboard`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["company"] });
+      toast.success("Configurações salvas! ✅");
+    },
+  });
+
+  const handleCopy = (requestId: string) => {
+    const link = `${window.location.origin}/${slug}/enviar/${requestId}`;
+    navigator.clipboard.writeText(link);
+    setCopiedId(requestId);
+    toast.success("Link copiado! 📋");
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleMagicReminder = (req: any) => {
+    if (!isPro) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+
+    const allItems = (req.request_items ?? []) as any[];
+    const requestUploads = (uploads ?? []).filter((u: any) =>
+      allItems.some((item: any) => item.id === u.request_item_id)
+    );
+
+    const pendingItems = allItems.filter((item: any) => {
+      if (item.item_type === "text" && item.is_completed) return false;
+      const itemUploads = requestUploads.filter((u: any) => u.request_item_id === item.id);
+      if (itemUploads.length === 0 && item.item_type !== "text") return true;
+      if (item.item_type === "text" && !item.is_completed) return true;
+      
+      const latestUpload = itemUploads.sort((a: any, b: any) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+      return latestUpload?.status === "rejected";
+    });
+
+    if (pendingItems.length === 0) {
+      toast.info("Todos os documentos já foram enviados! 🎉");
+      return;
+    }
+
+    const rejectedItems = pendingItems.filter((item: any) => {
+      const latestUpload = requestUploads
+        .filter((u: any) => u.request_item_id === item.id)
+        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      return latestUpload?.status === "rejected";
+    });
+
+    const notSentItems = pendingItems.filter((item: any) => !rejectedItems.includes(item));
+
+    let docList = "";
+    if (notSentItems.length > 0) {
+      docList += notSentItems.map((item: any) => `📎 ${item.item_name}`).join("\n");
+    }
+    if (rejectedItems.length > 0) {
+      if (docList) docList += "\n\n";
+      docList += "⚠️ *Documentos que precisam ser reenviados:*\n";
+      docList += rejectedItems.map((item: any) => {
+        const latestUpload = requestUploads
+          .filter((u: any) => u.request_item_id === item.id)
+          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        const reason = latestUpload?.rejection_reason ? ` (Motivo: ${latestUpload.rejection_reason})` : "";
+        return `🔄 ${item.item_name}${reason}`;
+      }).join("\n");
+    }
+
+    const link = `${window.location.origin}/${slug}/enviar/${req.id}`;
+    const message = `Olá, ${req.client_name}! 👋\n\nPassando para lembrar que ainda aguardamos o envio dos seguintes documentos:\n\n${docList}\n\n📲 Acesse seu link seguro para enviar:\n${link}\n\nQualquer dúvida, estou à disposição!`;
+    const encoded = encodeURIComponent(message);
+
+    const rawContact = (req.client_email ?? "").trim();
+    const digitsOnly = rawContact.replace(/\D/g, "");
+    const isPhone = digitsOnly.length >= 10 && !rawContact.includes("@");
+    const waUrl = isPhone
+      ? `https://wa.me/${digitsOnly}?text=${encoded}`
+      : `https://wa.me/?text=${encoded}`;
+
+    window.open(waUrl, "_blank");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/");
+  };
+
+  const handleCheckout = async () => {
+    setCheckoutLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-infinitepay-checkout");
+      if (error || data?.error) {
+        if (data?.fallback_url) {
+          window.open(data.fallback_url, "_blank");
+        } else {
+          toast.error("Erro ao gerar checkout", { description: data?.error || error?.message });
+        }
+        return;
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (err: any) {
+      toast.error("Erro ao processar pagamento");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
+
+  const handleDownloadZip = useCallback(async (requestId: string, clientNameArg: string) => {
+    setDownloadingZipId(requestId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error("Sessão expirada. Faça login novamente.");
+        return;
+      }
+
+      toast.info("Gerando ZIP... aguarde ⏳");
+      const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+      const functionUrl = `https://${projectId}.supabase.co/functions/v1/download-zip`;
+
+      const response = await fetch(functionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ requestId }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        let errorMsg = "Erro ao gerar ZIP";
+        try {
+          const parsed = JSON.parse(errorBody);
+          errorMsg = parsed.error || errorMsg;
+        } catch { /* not JSON */ }
+        toast.error(errorMsg);
+        return;
+      }
+
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        toast.error("ZIP vazio — nenhum arquivo aprovado encontrado");
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${clientNameArg} - Aprovados.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Download concluído! 📦");
+    } catch (err: any) {
+      toast.error("Erro ao baixar ZIP", { description: err.message });
+    } finally {
+      setDownloadingZipId(null);
+    }
+  }, []);
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("pt-BR");
+
+  // Filter uploads
+  const filteredUploads = uploads?.filter((file: any) => {
+    const matchesFilter = fileFilter === "all" || file.status === fileFilter;
+    const query = searchQuery.toLowerCase();
+    const matchesSearch = !query ||
+      file.file_name?.toLowerCase().includes(query) ||
+      file.request_items?.document_requests?.client_name?.toLowerCase().includes(query) ||
+      file.request_items?.item_name?.toLowerCase().includes(query);
+    return matchesFilter && matchesSearch;
+  }) ?? [];
+
+  const uploadsByClient = filteredUploads.reduce<Record<string, any[]>>((acc, file: any) => {
+    const clientName = file.request_items?.document_requests?.client_name ?? "Sem cliente";
+    if (!acc[clientName]) acc[clientName] = [];
+    acc[clientName].push(file);
+    return acc;
+  }, {});
 
   const visibleRequests = requests?.filter((r: any) => showArchived ? r.status === "archived" : r.status !== "archived") ?? [];
 
@@ -388,9 +657,19 @@ const DashboardPage = () => {
         </div>
 
         <Tabs defaultValue="requests" className="w-full">
-          <TabsList className="mb-6 rounded-2xl bg-muted/50 p-1">
-            <TabsTrigger value="requests" className="rounded-xl gap-2"><LinkIcon className="h-4 w-4" /> Solicitações</TabsTrigger>
-            <TabsTrigger value="files" className="rounded-xl gap-2"><FileText className="h-4 w-4" /> Arquivos</TabsTrigger>
+          <TabsList className="mb-6 rounded-2xl">
+            <TabsTrigger value="requests" className="rounded-xl">
+              <LinkIcon className="mr-2 h-4 w-4" /> Solicitações
+            </TabsTrigger>
+            <TabsTrigger value="files" className="rounded-xl">
+              <FileText className="mr-2 h-4 w-4" /> Arquivos
+            </TabsTrigger>
+            <TabsTrigger value="templates" className="rounded-xl">
+              <BookTemplate className="mr-2 h-4 w-4" /> Templates
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="rounded-xl">
+              <Settings className="mr-2 h-4 w-4" /> Configurações
+            </TabsTrigger>
           </TabsList>
           
           <TabsContent value="requests" className="space-y-4">
@@ -440,7 +719,205 @@ const DashboardPage = () => {
                     ))}
                   </TableBody>
                 </Table>
-             </div>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ─── Templates Tab ─── */}
+          <TabsContent value="templates">
+            {isPro ? (
+              <TemplatesTab companyId={company?.id} />
+            ) : (
+              <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-20">
+                <div className="mx-auto max-w-sm rounded-3xl border-2 border-primary/20 glass p-10 shadow-glow">
+                  <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl gradient-primary shadow-hero">
+                    <Crown className="h-10 w-10 text-primary-foreground" />
+                  </div>
+                  <h3 className="text-xl font-bold text-foreground mb-2">Templates Personalizados ✨</h3>
+                  <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+                    Crie kits de documentos reutilizáveis para agilizar seu fluxo de trabalho. Disponível exclusivamente no plano Pro.
+                  </p>
+                  <Button
+                    className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+                    onClick={() => handleCheckout()}
+                    disabled={checkoutLoading}
+                  >
+                    {checkoutLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</> : <>Fazer Upgrade para Pro 🚀</>}
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </TabsContent>
+
+          {/* ─── Settings Tab ─── */}
+          <TabsContent value="settings">
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <h3 className="mb-4 text-sm font-semibold text-foreground">Configurações da Conta ⚙️</h3>
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label htmlFor="display-name">Nome de Exibição</Label>
+                    <Input id="display-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="rounded-xl" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="slug">Slug da URL</Label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">/{""}</span>
+                      <Input id="slug" value={slugValue} onChange={(e) => setSlugValue(e.target.value)} className="rounded-xl" />
+                      <span className="text-sm text-muted-foreground">/enviar</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <div className="flex items-center gap-2 mb-4">
+                  <Palette className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Branding Avançado 🎨</h3>
+                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+                </div>
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label>Logo da Empresa</Label>
+                    <div className="flex items-center gap-4">
+                      {logoUrl && (
+                        <img src={logoUrl} alt="Logo" className="h-12 w-12 rounded-2xl object-cover border border-border shadow-card" />
+                      )}
+                      <label className={`cursor-pointer inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent ${!isPro ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {logoUploading ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" /> Enviando...</>
+                        ) : (
+                          <><Upload className="h-4 w-4" /> {logoUrl ? "Trocar logo" : "Enviar logo"}</>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={!isPro || logoUploading}
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file || !company) return;
+                            if (!isPro) { setUpgradeModalOpen(true); return; }
+                            setLogoUploading(true);
+                            try {
+                              const ext = file.name.split('.').pop();
+                              const filePath = `${company.id}/logo.${ext}`;
+                              const { error: uploadError } = await supabase.storage
+                                .from("logos")
+                                .upload(filePath, file, { upsert: true });
+                              if (uploadError) throw uploadError;
+                              const { data: urlData } = supabase.storage.from("logos").getPublicUrl(filePath);
+                              const publicUrl = urlData.publicUrl + "?t=" + Date.now();
+                              setLogoUrl(publicUrl);
+                              toast.success("Logo enviada! Salve as configurações para aplicar ✅");
+                            } catch (err: any) {
+                              console.error("[logo-upload]", err);
+                              toast.error("Erro ao enviar logo", { description: err.message });
+                            } finally {
+                              setLogoUploading(false);
+                              e.target.value = "";
+                            }
+                          }}
+                        />
+                      </label>
+                      {logoUrl && isPro && (
+                        <Button variant="ghost" size="sm" className="text-destructive rounded-xl" onClick={() => setLogoUrl("")}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> CNPJ</Label>
+                    <Input placeholder="00.000.000/0001-00" value={cnpj} onChange={(e) => isPro ? setCnpj(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" /> Telefone de Contato</Label>
+                    <Input placeholder="(14) 99999-9999" value={phone} onChange={(e) => isPro ? setPhone(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Cor da Marca</Label>
+                    <div className="flex items-center gap-4">
+                      <input type="color" value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : setUpgradeModalOpen(true)} className="h-10 w-10 rounded-xl border border-border cursor-pointer" disabled={!isPro} />
+                      <Input value={brandColor} onChange={(e) => isPro ? setBrandColor(e.target.value) : undefined} className="rounded-xl max-w-[120px] font-mono text-sm" disabled={!isPro} readOnly={!isPro} />
+                      <div className="h-10 w-10 rounded-xl border border-border" style={{ backgroundColor: brandColor }} />
+                      {!isPro && (
+                        <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setUpgradeModalOpen(true)}>
+                          <LockIcon className="mr-1.5 h-3 w-3" /> Desbloquear
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-border/60 bg-card p-6 shadow-card">
+                <div className="flex items-center gap-2 mb-4">
+                  <Cloud className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Sincronização em Nuvem ☁️</h3>
+                  {!isPro && <Badge variant="outline" className="text-xs border-pro/40 text-pro"><Crown className="mr-1 h-3 w-3" /> Pro</Badge>}
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Configure seu servidor de nuvem para sincronizar automaticamente arquivos aprovados.
+                </p>
+
+                {/* ownCloud Section */}
+                <div className="mb-6">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">ownCloud (WebDAV)</h4>
+                  <div className="space-y-4 max-w-md">
+                    <div className="space-y-2">
+                      <Label>URL do Servidor ownCloud</Label>
+                      <Input placeholder="https://cloud.seudominio.com.br" value={owncloudUrl} onChange={(e) => isPro ? setOwncloudUrl(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Usuário</Label>
+                      <Input placeholder="admin" value={owncloudUser} onChange={(e) => isPro ? setOwncloudUser(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Senha / Token de Aplicativo</Label>
+                      <Input type="password" placeholder="Token de aplicativo..." value={owncloudToken} onChange={(e) => isPro ? setOwncloudToken(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    {isPro && owncloudUrl && (
+                      <p className="text-xs text-success flex items-center gap-1">
+                        <Check className="h-3 w-3" /> Configurado — arquivos aprovados serão sincronizados automaticamente
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Google Drive Section */}
+                <div className="border-t border-border/40 pt-6">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Google Drive</h4>
+                  <div className="space-y-4 max-w-md">
+                    <div className="space-y-2">
+                      <Label>Client ID (OAuth)</Label>
+                      <Input placeholder="xxxx.apps.googleusercontent.com" value={gdriveClientId} onChange={(e) => isPro ? setGdriveClientId(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Client Secret</Label>
+                      <Input type="password" placeholder="GOCSPX-..." value={gdriveClientSecret} onChange={(e) => isPro ? setGdriveClientSecret(e.target.value) : setUpgradeModalOpen(true)} className="rounded-xl" disabled={!isPro} />
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      disabled={!isPro || !gdriveClientId || !gdriveClientSecret}
+                      onClick={() => toast.info("Autorização Google Drive em breve!", { description: "Esta funcionalidade será ativada na próxima atualização." })}
+                    >
+                      🔗 Autorizar Google Drive
+                    </Button>
+                    {isPro && gdriveClientId && gdriveClientSecret && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        Credenciais salvas. Clique em "Autorizar" para concluir a integração.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <Button onClick={() => updateSettings.mutate()} disabled={updateSettings.isPending} className="rounded-xl gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300">
+                {updateSettings.isPending ? "Salvando..." : "Salvar alterações ✅"}
+              </Button>
+            </div>
           </TabsContent>
         </Tabs>
       </main>
@@ -452,14 +929,41 @@ const DashboardPage = () => {
         />
       </ErrorBoundary>
 
-      <Dialog open={manageRequestOpen} onOpenChange={setManageRequestOpen}>
-        <DialogContent className="max-w-sm rounded-3xl text-center p-8">
-          <DialogHeader><DialogTitle>Gerenciar Solicitação</DialogTitle><DialogDescription>Deseja engavetar ou excluir permanentemente?</DialogDescription></DialogHeader>
-          <div className="space-y-6">
-            <div className="mx-auto w-16 h-16 rounded-3xl bg-destructive/10 flex items-center justify-center animate-pulse"><AlertTriangle className="h-8 w-8 text-destructive" /></div>
-            <div className="flex flex-col gap-3">
-              <Button variant="outline" className="rounded-xl h-11" onClick={() => selectedRequest && archiveRequest.mutate(selectedRequest.id)}>Engavetar</Button>
-              <Button variant="destructive" className="rounded-xl h-11" onClick={() => selectedRequest && deleteRequest.mutate(selectedRequest.id)}>Excluir</Button>
+      {/* Pro Upgrade Modal */}
+      <Dialog open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl text-center">
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="h-16 w-16 rounded-3xl gradient-primary flex items-center justify-center shadow-hero">
+              <Crown className="h-8 w-8 text-primary-foreground" />
+            </div>
+            <h2 className="text-xl font-bold text-foreground">Desbloqueie o Pro ✨</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Solicitações ilimitadas, uploads de até 2GB, white-label, lembrete mágico, senha no link, expiração, ownCloud sync, logs de auditoria e muito mais.
+            </p>
+            <div className="mt-2">
+              <span className="text-3xl font-extrabold text-foreground">R$49</span>
+              <span className="text-muted-foreground">/mês</span>
+            </div>
+            <Button
+              className="w-full rounded-2xl h-11 gradient-primary text-primary-foreground shadow-hero hover:shadow-glow transition-all duration-300"
+              onClick={() => handleCheckout()}
+              disabled={checkoutLoading}
+            >
+              {checkoutLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando checkout...</> : "Fazer Upgrade Agora 🚀"}
+            </Button>
+            <button onClick={() => setUpgradeModalOpen(false)} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Agora não
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cloud Sync Modal - now shows OwnCloud info */}
+      <Dialog open={cloudSyncModalOpen} onOpenChange={setCloudSyncModalOpen}>
+        <DialogContent className="max-w-sm rounded-3xl text-center">
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="h-16 w-16 rounded-3xl bg-accent flex items-center justify-center">
+              <Cloud className="h-8 w-8 text-accent-foreground" />
             </div>
           </div>
         </DialogContent>

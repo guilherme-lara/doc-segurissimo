@@ -1,10 +1,16 @@
 import React from 'react';
+import { Helmet } from 'react-helmet-async';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
 
 export default function Privacy() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 relative overflow-hidden selection:bg-indigo-500/30">
+      <Helmet>
+        <title>Política de Privacidade (LGPD) — Seguríssimo</title>
+        <meta name="description" content="Política de Privacidade e tratamento de dados pessoais do Seguríssimo, em conformidade com a LGPD." />
+        <link rel="canonical" href="https://doc-segurissimo.lovable.app/privacidade" />
+      </Helmet>
       {/* Efeito Glow de fundo verde/segurança */}
       <div className="absolute top-0 right-1/4 w-[600px] h-[600px] bg-emerald-500/10 dark:bg-emerald-500/15 blur-[120px] rounded-full pointer-events-none" />
 
