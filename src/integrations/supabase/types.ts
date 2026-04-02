@@ -64,6 +64,9 @@ export type Database = {
           cnpj: string | null
           created_at: string
           display_name: string
+          gdrive_client_id: string | null
+          gdrive_client_secret: string | null
+          gdrive_refresh_token: string | null
           id: string
           logo_url: string | null
           owncloud_token: string | null
@@ -79,6 +82,9 @@ export type Database = {
           cnpj?: string | null
           created_at?: string
           display_name: string
+          gdrive_client_id?: string | null
+          gdrive_client_secret?: string | null
+          gdrive_refresh_token?: string | null
           id?: string
           logo_url?: string | null
           owncloud_token?: string | null
@@ -94,6 +100,9 @@ export type Database = {
           cnpj?: string | null
           created_at?: string
           display_name?: string
+          gdrive_client_id?: string | null
+          gdrive_client_secret?: string | null
+          gdrive_refresh_token?: string | null
           id?: string
           logo_url?: string | null
           owncloud_token?: string | null
