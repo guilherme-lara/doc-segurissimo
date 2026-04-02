@@ -203,6 +203,8 @@ const DashboardPage = () => {
       setOwncloudUrl((company as any).owncloud_url ?? "");
       setOwncloudUser((company as any).owncloud_user ?? "");
       setOwncloudToken((company as any).owncloud_token ?? "");
+      setGdriveClientId((company as any).gdrive_client_id ?? "");
+      setGdriveClientSecret((company as any).gdrive_client_secret ?? "");
     }
   }, [company]);
 
